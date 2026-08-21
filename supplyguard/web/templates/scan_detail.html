@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div id="scan-meta" data-scan-id="{{ scan.id }}" style="display: none;"></div>
+
+<div class="page-header">
+  <div>
+    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+      <a href="/" class="btn btn-outline" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">← Back to Dashboard</a>
+      <span class="risk-badge {% if scan.risk_score < 25 %}risk-low{% elif scan.risk_score < 50 %}risk-medium{% elif scan.risk_score < 75 %}risk-high{% else %}risk-critical{% endif %}">
+        Risk Score: {{ scan.risk_score }} / 100
+      </span>
+      {% if has_remediations %}
+      <a href="/scan/{{ scan.id }}/remediation" class="btn btn-primary" style="padding: 0.3rem 0.8rem; font-size: 0.8rem;">
+        ✨ View Remediation Audit
+      </a>
+      {% endif %}
+    </div>
+    <h1 class="page-title">Scan #{{ scan.id }} Report</h1>
+    <p class="page-subtitle" style="font-family: 'Fira Code', monospace; font-size: 0.85rem;">{{ scan.project_path }}</p>
+  </div>
+  <div style="text-align: right; color: var(--text-secondary); font-size: 0.85rem;">
+    Started: {{ scan.started_at.strftime('%Y-%m-%d %H:%M:%S') }}
+  </div>
+</div>
+
+<div class="charts-grid">
+  <div class="chart-card">
+    <h3 class="card-title">Risk Assessment Gauge</h3>
+    <div class="chart-container">
+      <canvas id="riskScoreChart"></canvas>
+    </div>
+    <div style="text-align: center; margin-top: -30px; font-weight: 700; font-size: 1.25rem;">
+      {{ scan.risk_score }} <span style="font-size: 0.8rem; color: var(--text-muted);">/ 100</span>
+    </div>
+  </div>
+
+  <div class="chart-card">
+    <h3 class="card-title">Signal Source Composition</h3>
+    <div class="chart-container">
+      <canvas id="sourcePieChart"></canvas>
+    </div>
+  </div>
+
+  <div class="chart-card">
+    <h3 class="card-title">Findings by Severity</h3>
+    <div class="chart-container">
+      <canvas id="severityBarChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">
+    <span>Discovered Security Findings ({{ findings|length }})</span>
+    <div style="display: flex; gap: 0.75rem; font-size: 0.85rem;">
+      <input type="text" id="tableSearch" placeholder="Search findings..." style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-primary); padding: 0.3rem 0.6rem; border-radius: var(--radius-sm);">
+      <select id="severityFilter" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-primary); padding: 0.3rem 0.6rem; border-radius: var(--radius-sm);">
+        <option value="ALL">All Severities</option>
+        <option value="CRITICAL">Critical</option>
+        <option value="HIGH">High</option>
+        <option value="MEDIUM">Medium</option>
+        <option value="LOW">Low</option>
+      </select>
+      <select id="sourceFilter" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: var(--text-primary); padding: 0.3rem 0.6rem; border-radius: var(--radius-sm);">
+        <option value="ALL">All Sources</option>
+        <option value="sbom_osv">SBOM / OSV</option>
+        <option value="secrets">Secrets</option>
+        <option value="sast">SAST / AI Smells</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="data-table" id="findingsTable">
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Severity</th>
+          <th>Location</th>
+          <th>Rule / CWE</th>
+          <th>Finding Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in findings %}
+        <tr data-severity="{{ f.severity }}" data-source="{{ f.source }}">
+          <td>
+            <span style="font-weight: 600; color: {% if f.source == 'secrets' %}#f43f5e{% elif f.source == 'sbom_osv' %}#06b6d4{% else %}#8b5cf6{% endif %};">
+              {{ f.source|upper }}
+            </span>
+          </td>
+          <td>
+            <span class="badge-sev badge-{{ f.severity }}">{{ f.severity }}</span>
+          </td>
+          <td style="font-family: 'Fira Code', monospace; font-size: 0.85rem;">
+            {{ f.file }}:{{ f.line }}
+          </td>
+          <td style="font-family: 'Fira Code', monospace; font-size: 0.85rem;">
+            {{ f.rule_id or f.cwe }}
+          </td>
+          <td>{{ f.message }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

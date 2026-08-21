@@ -1,0 +1,103 @@
+name: SupplyGuard Security Gate
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      auto_remediate:
+        description: "Run automated self-healing remediation (supplyguard fix)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  supplyguard-scan:
+    name: Software Supply Chain Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # Required for SARIF upload
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install SupplyGuard
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run Security Scan (SARIF + Threshold Gate)
+        run: |
+          supplyguard scan . \
+            --format sarif \
+            --threshold 40 \
+            -o results.sarif \
+            --db-path ci_supplyguard.db
+
+      - name: Upload SARIF to GitHub Security Tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results.sarif
+          category: supplyguard
+
+      - name: Upload Scan Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: supplyguard-results
+          path: |
+            results.sarif
+            ci_supplyguard.db
+
+  supplyguard-test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run Tests
+        run: pytest tests/ -v --tb=short
+
+  supplyguard-remediate:
+    name: Self-Healing Remediation (Manual Trigger)
+    if: ${{ github.event.inputs.auto_remediate == 'true' }}
+    needs: supplyguard-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SupplyGuard
+        run: pip install -e .
+
+      - name: Execute Self-Healing Remediation Loop
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: supplyguard fix . --max-iterations 3

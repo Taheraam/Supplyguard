@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Security Dashboard</h1>
+    <p class="page-subtitle">Historical software supply chain security scans and risk posture</p>
+  </div>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card">
+    <span class="stat-label">Total Scans</span>
+    <span class="stat-value">{{ total_scans }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Average Risk Score</span>
+    <span class="stat-value" style="color: {% if avg_score < 25 %}#10b981{% elif avg_score < 50 %}#eab308{% else %}#ef4444{% endif %};">{{ avg_score }}/100</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Total Findings Logged</span>
+    <span class="stat-value">{{ total_findings }}</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">
+    <span>Scan History</span>
+  </div>
+  <div class="table-responsive">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Project Target</th>
+          <th>Risk Score</th>
+          <th>Components</th>
+          <th>Findings</th>
+          <th>Scanned At</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if scans %}
+          {% for s in scans %}
+          <tr>
+            <td>#{{ s.id }}</td>
+            <td style="font-family: 'Fira Code', monospace; font-size: 0.85rem;">{{ s.project_path }}</td>
+            <td>
+              <span class="risk-badge {% if s.risk_score < 25 %}risk-low{% elif s.risk_score < 50 %}risk-medium{% elif s.risk_score < 75 %}risk-high{% else %}risk-critical{% endif %}">
+                {{ s.risk_score }} / 100
+              </span>
+            </td>
+            <td>{{ s.components_count }}</td>
+            <td>{{ s.findings_count }}</td>
+            <td>{{ s.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td>
+              <a href="/scan/{{ s.id }}" class="btn btn-outline" style="padding: 0.25rem 0.6rem; font-size: 0.8rem;">View Details</a>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+              No scans recorded yet. Run <code>supplyguard scan .</code> in your terminal.
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
