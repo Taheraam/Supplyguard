@@ -1,97 +1,99 @@
 <div align="center">
 
-# 🛡️ SupplyGuard
+<img src="SupplygaurdLOGO.png" alt="SupplyGuard Logo" width="280">
 
-### **AI-Aware Software Supply Chain Security Scanner & Self-Healing Remediation Engine**
+# SupplyGuard
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.3.0-blue.svg?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/supplyguard/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![CI Security Gate](https://img.shields.io/badge/CI%20Gate-Passing-success.svg?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/supplyguard/supplyguard/actions)
-[![SARIF v2.1.0](https://img.shields.io/badge/SARIF-v2.1.0%20Compliant-purple.svg?style=for-the-badge&logo=oasis)](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+**Software Supply Chain Security Scanner & Self-Healing Remediation Engine**
+
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.3.0-blue.svg?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/supplyguard/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![CI Security Gate](https://img.shields.io/badge/CI%20Gate-Passing-success.svg?style=flat-square&logo=githubactions&logoColor=white)](https://github.com/Taheraam/Supplyguard/actions)
+[![SARIF v2.1.0](https://img.shields.io/badge/SARIF-v2.1.0-purple.svg?style=flat-square)](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
 
 <p align="center">
-  <b>Detect supply chain risks, exposed secrets, and AI-generated code vulnerabilities in seconds.</b><br>
-  <i>Compute an auditable 0–100 risk score, gate your CI/CD pipelines, and auto-heal fixable code with test-backed rollbacks.</i>
+  Detect supply chain vulnerabilities, leaked credentials, and AI-generated code smells in seconds.<br>
+  Compute an auditable 0–100 risk score, enforce CI/CD quality gates, and safely auto-patch fixable findings with test-backed rollbacks.
 </p>
 
-[Quickstart](#-quickstart) •
-[Features](#-key-features) •
-[Installation](#-installation) •
-[CLI Reference](#-cli-command-reference) •
-[CI/CD Integration](#-github-actions--cicd) •
-[Architecture](#-architecture)
+[Quickstart](#quickstart) •
+[Features](#features) •
+[Installation](#installation) •
+[CLI Reference](#cli-reference) •
+[CI/CD Integration](#cicd-integration) •
+[Architecture](#architecture) •
+[Security Principles](#security-principles)
 
 </div>
 
 ---
 
-## ⚡ The Problem: AI Code & Supply Chain Chaos
+## Overview
 
-Modern engineering teams move fast with AI coding assistants (Copilot, Cursor, Claude, ChatGPT). But AI models frequently introduce subtle, high-risk security flaws:
-- **Hallucinated or outdated dependencies** with known CVEs
-- **Hardcoded API keys and secrets** accidentally committed to repositories
-- **Subtle AI-code smells**: unparameterized SQL queries, `subprocess(shell=True)`, disabled TLS validation (`verify=False`), and disabled JWT checks
+Modern software development relies heavily on third-party dependencies and AI code generation. However, automated coding workflows regularly introduce critical vulnerabilities:
+- Unpinned or vulnerable dependencies with published CVEs
+- Leaked API keys, database credentials, and access tokens committed to version control
+- Antipatterns common in AI-generated code: unparameterized SQL queries, dynamic subprocess execution with `shell=True`, disabled TLS certificate verification, and unverified JWT decoding
 
-**SupplyGuard solves this in one command.** It scans your repository across 4 security dimensions, unifies findings into a single risk score (0–100), outputs industry-standard SARIF reports, and safely auto-patches vulnerabilities without breaking your build.
-
----
-
-## ✨ Key Features
-
-| Feature | Description |
-|---|---|
-| 📦 **CycloneDX SBOM Generation** | Automatically parses Python project manifests (`requirements.txt`, `pyproject.toml`) and produces machine-readable Software Bills of Materials. |
-| 🌐 **Live OSV.dev Correlation** | Batch queries the Open Source Vulnerability (OSV) database in real-time with sub-second lookups across all dependencies. |
-| 🔑 **Zero-Leak Secrets Scanner** | Fast credential detection for AWS keys, OpenAI keys, JWT tokens, and private keys. Strictly stores redacted previews (`AKIA...XYZ`) to guarantee zero secrets leakage. |
-| 🧠 **AI-Code Smell SAST Engine** | 10 specialized static analysis rules targeting common AI code generation antipatterns (CWE-89, CWE-78, CWE-295, CWE-489, CWE-347, CWE-916, etc.). |
-| 🛡️ **Zero-Dependency Fallbacks** | Works out-of-the-box on Windows, macOS, and Linux with built-in pure Python AST analysis and regex engines if Gitleaks or Semgrep are missing. |
-| 🔧 **Self-Healing Remediation Loop** | Multi-strategy auto-fixer (Deterministic, Hybrid, LLM-Assisted) backed by an **in-memory backup & AST-safety verifier** that automatically rolls back broken patches. |
-| 📊 **SARIF v2.1.0 & CI Gates** | Native export to SARIF for the **GitHub Security Code Scanning Tab** and customizable threshold-based exit codes (`--threshold 40`). |
-| 🖥️ **Interactive Web Dashboard** | Built-in Flask + Chart.js web interface to explore scan history, risk gauges, and remediation diff timelines. |
+SupplyGuard addresses this by scanning codebases across four synchronized security dimensions, unifying findings into a weighted 0–100 risk score, exporting compliant SARIF reports for GitHub Code Scanning, and providing an automated remediation loop with built-in AST verification and rollback safety.
 
 ---
 
-## 🚀 Installation
+## Features
 
-### Option 1: Using `pipx` (Recommended for CLI tools)
-Installs SupplyGuard in an isolated environment and makes the `supplyguard` command globally accessible everywhere in your terminal:
+- **CycloneDX SBOM Generation**: Automated manifest parsing for dependency auditing across Python projects.
+- **OSV.dev Vulnerability Correlation**: Real-time batch queries against the Open Source Vulnerability database for up-to-date CVE matching.
+- **Zero-Leak Secrets Scanner**: Pattern matching for API tokens and credentials with strict zero-leakage redaction (`first 3 + ... + last 3 chars`).
+- **AI-Code Smell SAST**: Static analysis rules targeting security weaknesses common in LLM-assisted codebases (CWE-89, CWE-78, CWE-295, CWE-489, CWE-347, CWE-916, CWE-330).
+- **Self-Healing Remediation**: Automated patch generation backed by an in-memory backup and AST verifier that rolls back any modification that introduces syntax errors or test regressions.
+- **Native SARIF v2.1.0 & CI Gates**: Native export to SARIF for the GitHub Security tab and configurable risk threshold exit codes (`--threshold 40`).
+- **Zero-Config Execution**: Built-in fallback engines that operate out-of-the-box without requiring external binary installations.
+
+---
+
+## Installation
+
+### pipx (Recommended for global CLI use)
+
 ```bash
 pipx install supplyguard
 ```
 
-### Option 2: Standard `pip`
+### pip
+
 ```bash
 pip install supplyguard
 ```
 
-### Option 3: Docker (Zero-Install)
-Scan any directory without installing Python locally:
+### Docker
+
 ```bash
-docker run --rm -v ${PWD}:/src ghcr.io/supplyguard/supplyguard scan /src
+docker build -t supplyguard .
+docker run --rm -v $(pwd):/src supplyguard scan /src
 ```
 
-### Option 4: From Source
+### From Source
+
 ```bash
-git clone https://github.com/supplyguard/supplyguard.git
-cd supplyguard
+git clone https://github.com/Taheraam/Supplyguard.git
+cd Supplyguard
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\Activate.ps1
+source .venv/bin/activate  # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ```
 
 ---
 
-## 🏁 Quickstart
+## Quickstart
 
 ### 1. Initialize Configuration
-Set up a `.supplyguard.yml` config file for your repository:
+Generate a `.supplyguard.yml` policy file for your project:
 ```bash
 supplyguard init
 ```
 
-### 2. Run a Security Scan
-Run an interactive audit of your current codebase:
+### 2. Run a Read-Only Security Scan
 ```bash
 supplyguard scan .
 ```
@@ -100,78 +102,72 @@ supplyguard scan .
 ```bash
 supplyguard scan . --threshold 40 --format sarif -o results.sarif
 ```
-*Exits with code `0` if passed, or code `1` if the risk score exceeds threshold.*
+*Exits with code `0` on pass, or code `1` if the risk score exceeds the threshold.*
 
-### 4. Test Automated Self-Healing (Dry Run)
-Simulate fixes and preview safe code modifications without touching any files:
+### 4. Preview Automated Remediation (Dry Run)
 ```bash
 supplyguard fix . --dry-run
 ```
 
-### 5. Execute Auto-Remediation
+### 5. Apply Remediation Patches
 ```bash
 supplyguard fix . --max-iterations 3
 ```
 
-### 6. Launch the Visual Dashboard
+### 6. Launch the Local Web Dashboard
 ```bash
 supplyguard web --port 5000
 ```
-*Open `http://127.0.0.1:5000` in your browser to inspect interactive risk charts, SBOM components, and patch diffs.*
+*Navigate to `http://127.0.0.1:5000` to review scan history and patch diffs.*
 
 ---
 
-## 💻 CLI Command Reference
+## CLI Reference
 
 ### `supplyguard scan [PATH]`
-Scan a project for supply chain risks, vulnerabilities, and secrets.
 
-```bash
-supplyguard scan [OPTIONS] [PROJECT_PATH]
-```
+Scan a target codebase for dependencies, vulnerabilities, secrets, and static code smells.
 
-| Flag | Short | Default | Description |
+| Option | Short | Default | Description |
 |---|---|---|---|
 | `--format` | `-f` | `table` | Output format: `table`, `json`, or `sarif`. |
 | `--threshold` | `-t` | `100` | Risk score threshold (0–100). Exits with code `1` if exceeded. |
-| `--output` | `-o` | `stdout` | Write output report directly to a file path. |
+| `--output` | `-o` | `stdout` | Write output to a specific file path. |
 | `--db-path` | | `supplyguard.db` | Target SQLite database path for history tracking. |
-| `--verbose` | `-v` | `false` | Enable verbose debug logs. |
+| `--verbose` | `-v` | `false` | Enable verbose debug output. |
 
 #### Exit Codes:
-* `0` — Scan completed successfully (Risk Score ≤ Threshold).
-* `1` — **Policy Violation**: Risk score exceeded `--threshold`.
-* `2` — Tool execution error.
+- `0`: Scan passed (Risk Score <= Threshold)
+- `1`: Policy violation (Risk Score > Threshold)
+- `2`: Tool execution error
 
 ---
 
 ### `supplyguard fix [PATH]`
-Trigger the self-healing remediation loop to safely patch detected findings.
 
-```bash
-supplyguard fix [OPTIONS] [PROJECT_PATH]
-```
+Execute the self-healing remediation loop.
 
-| Flag | Default | Description |
+| Option | Default | Description |
 |---|---|---|
-| `--dry-run` | `false` | Simulate fixes without altering files on disk. |
-| `--max-iterations` | `5` | Maximum cycles of fix-and-verify convergence. |
-| `--no-llm` | `false` | Restrict fixes to deterministic rules (disable LLM patches). |
+| `--dry-run` | `false` | Simulate patches without modifying files on disk. |
+| `--max-iterations` | `5` | Maximum number of fix-and-rescan convergence iterations. |
+| `--no-llm` | `false` | Disable LLM-assisted patches and use only deterministic rules. |
 | `--db-path` | `supplyguard.db` | SQLite database path. |
 
 ---
 
 ### `supplyguard report <SCAN_ID>`
-View or export a detailed report from a past scan stored in the database:
+
+Retrieve and format results from a previous scan stored in SQLite:
 ```bash
 supplyguard report 1 --format json
 ```
 
 ---
 
-## ⚙️ Configuration (`.supplyguard.yml`)
+## Configuration (`.supplyguard.yml`)
 
-Drop a `.supplyguard.yml` in your project root to enforce team-wide security policies:
+Project-level settings can be configured via a `.supplyguard.yml` file placed at the root of the target repository:
 
 ```yaml
 # .supplyguard.yml
@@ -182,31 +178,30 @@ threshold: 40
 # Default output format: table | json | sarif
 format: table
 
-# Minimum severity level to include in scan results
-# Options: CRITICAL, HIGH, MEDIUM, LOW
+# Minimum severity level to include in scan results (CRITICAL, HIGH, MEDIUM, LOW)
 severity_minimum: MEDIUM
 
-# Directories and files to exclude from scanning
+# Paths to exclude from scanning
 ignore_paths:
   - ".venv/"
   - "tests/"
   - "docs/"
   - "node_modules/"
 
-# Suppress specific false-positives or accepted risks
+# Rule IDs or CWE identifiers to suppress
 ignore_rules:
-  - "CWE-489"  # Ignore flask debug=True in local development
-  - "GHSA-xxxx-xxxx-xxxx"
+  - "CWE-489"  # Allow debug=True in local development
 ```
 
 ---
 
-## 🔄 GitHub Actions / CI/CD
+## CI/CD Integration
 
-Integrate SupplyGuard directly into your GitHub Pull Request workflow to display findings in the native **GitHub Security → Code Scanning** tab:
+### GitHub Actions
+
+Upload scan findings directly to the **GitHub Security -> Code Scanning** tab:
 
 ```yaml
-# .github/workflows/security.yml
 name: SupplyGuard Security Gate
 
 on:
@@ -216,7 +211,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  security-audit:
+  security-scan:
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -232,34 +227,34 @@ jobs:
       - name: Install SupplyGuard
         run: pip install supplyguard
 
-      - name: Run Security Gate
+      - name: Run Security Scan
         run: |
           supplyguard scan . \
             --format sarif \
             --threshold 40 \
-            -o supplyguard-results.sarif
+            -o results.sarif
 
-      - name: Upload SARIF to GitHub Security Tab
+      - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: supplyguard-results.sarif
+          sarif_file: results.sarif
           category: supplyguard
 ```
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```mermaid
 graph TD
-    A[Target Codebase] --> B[SupplyGuard Engine]
+    A[Target Codebase] --> B[SupplyGuard Core Engine]
 
-    subgraph "Signal Ingestion Layer"
+    subgraph "Signal Source Layer"
         B --> C[CycloneDX SBOM Generator]
         B --> D[OSV.dev REST API Client]
         B --> E[Zero-Leak Secrets Scanner]
-        B --> F[AI Code Smell SAST / AST Engine]
+        B --> F[SAST & AI Smells AST Engine]
     end
 
     C --> G[Weighted 0-100 Risk Engine]
@@ -269,67 +264,68 @@ graph TD
 
     G --> H[(SQLite Database)]
     G --> I[SARIF v2.1.0 & JSON Exporters]
-    H --> J[Flask + Chart.js Dashboard]
+    H --> J[Flask Dashboard]
 
-    subgraph "Self-Healing Remediation Loop"
+    subgraph "Self-Healing Remediation Engine"
         G --> K[Fixability Classifier]
-        K -->|Deterministic| L[Dep Version Bump / Code Rewrite]
+        K -->|Deterministic| L[Version Bump / Code Rewrite]
         K -->|Hybrid| M[Secret Extraction to .env.example]
-        K -->|LLM-Assisted| N[Claude Parameterization Patch]
-        K -->|Manual-Required| O[Explicit Human Review Report]
+        K -->|LLM-Assisted| N[Parameterized Query Patch]
+        K -->|Manual-Required| O[Human Review Report]
 
-        L --> P[Safety Verifier<br/>AST Check + Rescan + Regression Tests]
+        L --> P[Safety Verifier<br/>AST Validation + Test Suite]
         N --> P
         P -->|Rollback on Fail| K
-        P -->|Pass| Q[Diff Audit Trail in DB]
+        P -->|Pass| Q[Diff Audit Trail]
     end
 ```
 
 ---
 
-## 🛡️ Fixability Classification & Guardrails
+## Fixability Classification
 
-SupplyGuard strictly separates **safe automated fixes** from **context-sensitive human decisions**:
+SupplyGuard maintains a strict separation between deterministic fixes and changes requiring architectural review:
 
-| Finding Category | CWE | Strategy | Action Taken |
+| Finding Category | CWE | Strategy | Action |
 |---|---|---|---|
-| Known Vulnerable Dependency (Fix Available) | — | **Deterministic** | Safely bumps pinned version in `requirements.txt`. |
-| Vulnerable Dependency (No Fix Published) | — | **Manual-Required** | Explicitly alerts developer; no safe upgrade exists. |
-| Hardcoded Secret Detected | CWE-798 | **Hybrid** | Extracts stub to `.env.example`, redacts in place, flags key for rotation. |
-| `requests(..., verify=False)` | CWE-295 | **Deterministic** | Restores TLS certificate validation. |
-| `app.run(debug=True)` | CWE-489 | **Deterministic** | Forces `debug=False` for production safety. |
-| JWT Unverified Decode | CWE-347 | **Deterministic** | Enforces signature verification check. |
-| Insecure Random for Tokens | CWE-330 | **Deterministic** | Automatically migrates `random` to Python `secrets` module. |
-| SQL Injection String Concat | CWE-89 | **LLM-Assisted** | Synthesizes parameterized query patch; gates on test suite. |
-| Subprocess Shell Injection | CWE-78 | **LLM-Assisted** | Converts shell strings to argument lists; gates on test suite. |
-| Missing Auth on Admin Route | CWE-862 | **Manual-Required** | **Never auto-fixes** — cannot guess intended auth/role model. |
-| Unsafe `eval` / `exec` / `pickle` | CWE-94 / 502 | **Manual-Required** | **Never auto-fixes** — requires architectural refactoring. |
-| CORS Wildcard with Credentials | CWE-942 | **Manual-Required** | **Never auto-fixes** — requires human domain allowlist. |
+| Known Vulnerable Dependency (Fix Available) | — | **Deterministic** | Bumps pinned version in `requirements.txt`. |
+| Vulnerable Dependency (No Fix Available) | — | **Manual-Required** | Flags finding; no safe target version exists. |
+| Hardcoded Secret | CWE-798 | **Hybrid** | Extracts stub to `.env.example`, redacts in place, flags key for rotation. |
+| TLS Validation Disabled (`verify=False`) | CWE-295 | **Deterministic** | Restores TLS certificate validation. |
+| Production Debug Mode (`debug=True`) | CWE-489 | **Deterministic** | Sets `debug=False`. |
+| Unverified JWT Decode | CWE-347 | **Deterministic** | Enforces signature verification checks. |
+| Insecure Randomness for Secrets | CWE-330 | **Deterministic** | Migrates `random` usage to `secrets` module. |
+| SQL Injection (String Formatting) | CWE-89 | **LLM-Assisted** | Constructs parameterized query patch gated on test suite. |
+| Subprocess Shell Injection | CWE-78 | **LLM-Assisted** | Converts shell command strings to argument lists. |
+| Unprotected Sensitive Route | CWE-862 | **Manual-Required** | Escalated to developer; cannot infer authentication model. |
+| Dynamic Code Execution (`eval`/`exec`/`pickle`) | CWE-94 / 502 | **Manual-Required** | Escalated to developer; requires architectural refactoring. |
+| CORS Wildcard with Credentials | CWE-942 | **Manual-Required** | Escalated to developer; requires explicit origin allowlist. |
 
 ---
 
-## 🔒 Security Principles (What SupplyGuard Will NEVER Do)
+## Security Principles
 
-1. **Never auto-push or auto-merge to remote repositories**: All remediation stops at clean local diffs.
-2. **Never log, store, or expose full raw secrets**: Zero-leakage redaction stores only `first 3 + ... + last 3 chars`.
-3. **Never apply untested code patches**: All self-healing fixes must pass AST validation and project test suites before being retained.
-4. **Never guess human security intent**: Unprotected routes and dynamic code execution are always escalated to humans.
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please follow these steps:
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Run tests & linters (`pytest tests/ -v` and `ruff check .`)
-4. Commit your changes (`git commit -m 'feat: add amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
+1. **Local-Only Remediation**: `supplyguard fix` never pushes or merges changes to remote branches. All modifications remain local for developer review.
+2. **Zero Raw Secret Storage**: The secrets scanner redacts findings (`first 3 + ... + last 3 chars`) before logging, database persistence, or display.
+3. **Rollback-on-Failure**: Automated patches must pass syntax parsing and existing test suites before being kept. If verification fails, changes are reverted automatically.
+4. **No Intent Guessing**: Security-critical controls such as authentication boundaries and authorization decorators are never guessed and are flagged for manual review.
 
 ---
 
-## 📄 License
+## Contributing
 
-SupplyGuard is licensed under the [MIT License](LICENSE). Built for security engineers, DevOps teams, and developers who care about supply chain integrity.
+Contributions are welcome. Please ensure that all changes include appropriate test coverage and pass static checks:
+
+```bash
+# Run unit and integration tests
+pytest tests/ -v
+
+# Run linting
+ruff check .
+```
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

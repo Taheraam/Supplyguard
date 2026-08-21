@@ -78,6 +78,9 @@ MANIFEST
 Thumbs.db
 desktop.ini
 
-# Agent / AI Scratch Files
+# Agent / AI Scratch Files & Internal Planning
 .agent/
 .gemini/
+SupplyGuard_Antigravity_Build_Plan.md
+SupplyGuard_v2_Remediation_Build_Plan.md
+implementation_plan_v1
