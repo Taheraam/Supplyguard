@@ -1,0 +1,12 @@
+# SupplyGuard Configuration for self-scanning
+threshold: 50
+format: table
+severity_minimum: MEDIUM
+
+ignore_paths:
+  - ".venv/"
+  - "examples/"
+  - "tests/"
+  - "docs/"
+  - "node_modules/"
+  - "__pycache__/"

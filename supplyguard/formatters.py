@@ -194,12 +194,10 @@ def _build_sarif_rule(finding: dict[str, Any]) -> dict[str, Any]:
     }
 
     if cwe and cwe.startswith("CWE-"):
-        cwe_id = cwe.replace("CWE-", "")
         rule["relationships"] = [
             {
                 "target": {
                     "id": cwe,
-                    "guid": f"00000000-0000-0000-0000-{cwe_id.zfill(12)}",
                     "toolComponent": {"name": "CWE"},
                 },
                 "kinds": ["superset"],
