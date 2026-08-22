@@ -60,10 +60,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/supplyguard/supplyguard"
-Repository = "https://github.com/supplyguard/supplyguard"
-Documentation = "https://github.com/supplyguard/supplyguard#readme"
-"Bug Tracker" = "https://github.com/supplyguard/supplyguard/issues"
+Homepage = "https://github.com/Taheraam/Supplyguard"
+Repository = "https://github.com/Taheraam/Supplyguard"
+Documentation = "https://github.com/Taheraam/Supplyguard#readme"
+"Bug Tracker" = "https://github.com/Taheraam/Supplyguard/issues"
 
 [project.scripts]
 supplyguard = "supplyguard.cli:main"

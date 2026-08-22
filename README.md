@@ -54,32 +54,45 @@ SupplyGuard addresses this by scanning codebases across four synchronized securi
 
 ## Installation
 
-### pipx (Recommended for global CLI use)
+### 1. Global Installation (For Users)
 
-```bash
-pipx install supplyguard
-```
+For the easiest experience, install SupplyGuard globally using a single command from PyPI. This works across all operating systems.
 
-### pip
-
+**Windows, Mac & Linux:**
 ```bash
 pip install supplyguard
 ```
 
-### Docker
+*(Note: If you prefer isolated global CLI installations and have `pipx` installed, you can use `pipx install supplyguard` instead).*
+
+### 2. Docker (Containerized)
+
+If you prefer using Docker, you can build and run the image directly:
 
 ```bash
 docker build -t supplyguard .
 docker run --rm -v $(pwd):/src supplyguard scan /src
 ```
 
-### From Source
+### 3. From Source (For Developers)
 
+If you plan to modify the code, clone the repository and install it in editable mode. The activation step depends on your operating system.
+
+**Mac & Linux:**
 ```bash
 git clone https://github.com/Taheraam/Supplyguard.git
 cd Supplyguard
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/Taheraam/Supplyguard.git
+cd Supplyguard
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ```
 
