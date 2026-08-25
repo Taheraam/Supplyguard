@@ -10,3 +10,17 @@ ignore_paths:
   - "docs/"
   - "node_modules/"
   - "__pycache__/"
+  - ".git/"
+  - ".pytest_cache/"
+  - "dist/"
+  - "build/"
+  - "*.egg-info/"
+  - "implementation_plan_v1"
+  - "SupplyGuard_Antigravity_Build_Plan.md"
+  - "SupplyGuard_v2_Remediation_Build_Plan.md"
+  - "DiffUserReport.md"
+
+# Suppress rules that are false positives from the scanner's own pattern definitions
+ignore_rules:
+  - "fake-test-key"
+  - "ai-cors-wildcard-with-credentials"

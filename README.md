@@ -6,7 +6,7 @@
 
 **Software Supply Chain Security Scanner & Self-Healing Remediation Engine**
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.3.0-blue.svg?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/supplyguard/)
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.3.1-blue.svg?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/supplyguard/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![CI Security Gate](https://img.shields.io/badge/CI%20Gate-Passing-success.svg?style=flat-square&logo=githubactions&logoColor=white)](https://github.com/Taheraam/Supplyguard/actions)

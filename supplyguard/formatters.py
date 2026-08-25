@@ -13,8 +13,8 @@ from supplyguard.scoring.engine import ScoreBreakdown
 
 SARIF_SCHEMA = "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json"
 TOOL_NAME = "SupplyGuard"
-TOOL_VERSION = "0.3.0"
-TOOL_URI = "https://github.com/supplyguard/supplyguard"
+TOOL_VERSION = "0.3.1"
+TOOL_URI = "https://github.com/Taheraam/Supplyguard"
 
 
 @dataclass

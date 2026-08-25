@@ -31,6 +31,26 @@ class SemgrepExecutionError(Exception):
     """Raised when Semgrep static analysis fails."""
 
 
+def _path_matches_ignore(rel_path: str, ignore_patterns: list[str]) -> bool:
+    """Check if a relative path matches any of the ignore patterns.
+
+    Args:
+        rel_path: Relative file path to check.
+        ignore_patterns: List of patterns from .supplyguard.yml ignore_paths.
+
+    Returns:
+        True if the path should be ignored.
+    """
+    normalized = rel_path.replace("\\", "/")
+    for pattern in ignore_patterns:
+        clean = pattern.strip().rstrip("/")
+        if normalized.startswith(clean + "/") or normalized == clean:
+            return True
+        if "/" not in clean and clean in normalized.split("/"):
+            return True
+    return False
+
+
 def _run_semgrep_cli(
     project_path: Path, rules_path: Path, include_public: bool = False
 ) -> list[SastFinding]:
@@ -263,10 +283,19 @@ class _FallbackAstVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _fallback_sast_scan(project_path: Path) -> list[SastFinding]:
-    """Pure-Python AST analysis fallback when Semgrep CLI is unavailable."""
+def _fallback_sast_scan(project_path: Path, ignore_paths: list[str] | None = None) -> list[SastFinding]:
+    """Pure-Python AST analysis fallback when Semgrep CLI is unavailable.
+
+    Args:
+        project_path: Path to target project.
+        ignore_paths: Path patterns to exclude from scanning.
+
+    Returns:
+        List of SastFinding instances.
+    """
     import os
 
+    excluded = ignore_paths or []
     findings: list[SastFinding] = []
     ignore_dirs = {".git", ".venv", "node_modules", "__pycache__", ".agent", ".pytest_cache"}
 
@@ -276,6 +305,12 @@ def _fallback_sast_scan(project_path: Path) -> list[SastFinding]:
             if not f.endswith(".py"):
                 continue
             py_file = Path(root) / f
+            rel_str = str(py_file.relative_to(project_path))
+
+            # Skip files matching any ignore_paths pattern
+            if _path_matches_ignore(rel_str, excluded):
+                continue
+
             try:
                 source = py_file.read_text(encoding="utf-8")
                 tree = ast.parse(source, filename=str(py_file))
@@ -312,6 +347,7 @@ def run_sast(
     rules_path: Path | None = None,
     include_public_rules: bool = False,
     allow_fallback: bool = True,
+    ignore_paths: list[str] | None = None,
 ) -> list[SastFinding]:
     """Execute SAST scan against project_path using Semgrep or fallback parser.
 
@@ -320,15 +356,24 @@ def run_sast(
         rules_path: Optional path to custom Semgrep rules YAML.
         include_public_rules: Whether to also run p/security-audit rules.
         allow_fallback: Fallback to AST scanner if semgrep is unavailable.
+        ignore_paths: Path patterns to exclude from scanning.
 
     Returns:
         List of SastFinding instances.
     """
     target_rules = rules_path or DEFAULT_RULES_PATH
     try:
-        return _run_semgrep_cli(project_path, target_rules, include_public_rules)
+        findings = _run_semgrep_cli(project_path, target_rules, include_public_rules)
     except SemgrepExecutionError as err:
         if allow_fallback:
             logger.debug(f"{err}. Using internal AST SAST scanner.")
-            return _fallback_sast_scan(project_path)
+            return _fallback_sast_scan(project_path, ignore_paths=ignore_paths)
         raise
+
+    # Filter semgrep results by ignore_paths too
+    if ignore_paths:
+        findings = [
+            f for f in findings
+            if not _path_matches_ignore(f.file, ignore_paths)
+        ]
+    return findings

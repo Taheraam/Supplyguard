@@ -94,7 +94,12 @@ def fix_sast_deterministic(
             if "import secrets" not in patched:
                 patched = "import secrets\n" + patched
             patched = re.sub(r"\brandom\.choice\(", "secrets.choice(", patched)
-            patched = re.sub(r"\brandom\.randint\(", "secrets.randbelow(", patched)
+
+            def _replace_randint(m: re.Match) -> str:
+                a, b = m.group(1).strip(), m.group(2).strip()
+                return f"({a} + secrets.randbelow({b} - {a} + 1))"
+
+            patched = re.sub(r"\brandom\.randint\(([^,]+),([^)]+)\)", _replace_randint, patched)
             target_file.write_text(patched, encoding="utf-8")
 
     def _check() -> bool:

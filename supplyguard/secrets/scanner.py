@@ -27,6 +27,30 @@ class GitleaksNotFoundError(Exception):
     """Raised when the gitleaks executable is not found on PATH."""
 
 
+def _path_matches_ignore(rel_path: str, ignore_patterns: list[str]) -> bool:
+    """Check if a relative path matches any of the ignore patterns.
+
+    Supports directory patterns (ending with '/') and exact file name matches.
+
+    Args:
+        rel_path: Relative file path to check.
+        ignore_patterns: List of patterns from .supplyguard.yml ignore_paths.
+
+    Returns:
+        True if the path should be ignored.
+    """
+    normalized = rel_path.replace("\\", "/")
+    for pattern in ignore_patterns:
+        clean = pattern.strip().rstrip("/")
+        # Directory prefix match (e.g., "examples/" matches "examples/foo.py")
+        if normalized.startswith(clean + "/") or normalized == clean:
+            return True
+        # Basename match (e.g., "implementation_plan_v1" matches the file directly)
+        if "/" not in clean and clean in normalized.split("/"):
+            return True
+    return False
+
+
 def redact_secret(raw_secret: str) -> str:
     """Redact secret string keeping only first 3 and last 3 characters.
 
@@ -108,8 +132,16 @@ def _run_gitleaks_cli(project_path: Path) -> list[SecretFinding]:
             report_path.unlink()
 
 
-def _fallback_regex_scan(project_path: Path) -> list[SecretFinding]:
-    """Built-in regex fallback secrets scanner if gitleaks CLI is unavailable."""
+def _fallback_regex_scan(project_path: Path, ignore_paths: list[str] | None = None) -> list[SecretFinding]:
+    """Built-in regex fallback secrets scanner if gitleaks CLI is unavailable.
+
+    Args:
+        project_path: Directory path to scan.
+        ignore_paths: List of path patterns to exclude from scanning.
+
+    Returns:
+        List of SecretFinding instances.
+    """
     import os
 
     patterns = [
@@ -119,6 +151,7 @@ def _fallback_regex_scan(project_path: Path) -> list[SecretFinding]:
         ("fake-test-key", re.compile(r"""(FAKE_KEY_FOR_TESTING_DO_NOT_USE|TEST_API_KEY_[A-Z0-9_]+)""")),
     ]
 
+    excluded = ignore_paths or []
     findings: list[SecretFinding] = []
     ignore_dirs = {".git", ".venv", "node_modules", "__pycache__", ".agent", ".pytest_cache"}
 
@@ -126,12 +159,17 @@ def _fallback_regex_scan(project_path: Path) -> list[SecretFinding]:
         dirs[:] = [d for d in dirs if d not in ignore_dirs]
         for f in files:
             file_path = Path(root) / f
+            rel_str = str(file_path.relative_to(project_path))
+
+            # Skip files matching any ignore_paths pattern
+            if _path_matches_ignore(rel_str, excluded):
+                continue
+
             try:
                 lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
             except OSError:
                 continue
 
-            rel_str = str(file_path.relative_to(project_path))
             for line_no, line_content in enumerate(lines, start=1):
                 for rule_id, pattern in patterns:
                     match = pattern.search(line_content)
@@ -149,20 +187,33 @@ def _fallback_regex_scan(project_path: Path) -> list[SecretFinding]:
     return findings
 
 
-def scan_secrets(project_path: Path, allow_fallback: bool = True) -> list[SecretFinding]:
+def scan_secrets(
+    project_path: Path,
+    allow_fallback: bool = True,
+    ignore_paths: list[str] | None = None,
+) -> list[SecretFinding]:
     """Scan project for hardcoded secrets and credentials.
 
     Args:
         project_path: Directory path of the target codebase.
         allow_fallback: Whether to use regex fallback if gitleaks is absent.
+        ignore_paths: Path patterns to exclude from scanning.
 
     Returns:
         List of SecretFinding with redacted previews.
     """
     try:
-        return _run_gitleaks_cli(project_path)
+        findings = _run_gitleaks_cli(project_path)
     except GitleaksNotFoundError as err:
         if allow_fallback:
             logger.debug(f"{err}. Falling back to internal regex scanner.")
-            return _fallback_regex_scan(project_path)
+            return _fallback_regex_scan(project_path, ignore_paths=ignore_paths)
         raise
+
+    # Filter gitleaks results by ignore_paths too
+    if ignore_paths:
+        findings = [
+            f for f in findings
+            if not _path_matches_ignore(f.file, ignore_paths)
+        ]
+    return findings

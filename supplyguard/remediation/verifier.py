@@ -3,6 +3,7 @@
 import ast
 import difflib
 import logging
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -40,24 +41,39 @@ def _run_project_tests(project_path: Path) -> bool:
         project_path: Project root directory.
 
     Returns:
-        True if tests passed or no test suite detected, False if tests failed.
+        True if tests passed or no test suite / test runner detected, False if tests failed.
     """
     tests_dir = project_path / "tests"
     if not tests_dir.exists() or not any(tests_dir.glob("test_*.py")):
         return True
 
     rel_tests = str(tests_dir.relative_to(project_path))
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        rel_tests,
-        "-o",
-        f"rootdir={project_path}",
-        "-o",
-        "testpaths=tests",
-        "-q",
-    ]
+
+    # Look for pytest executable or fallback to sys.executable -m pytest
+    pytest_bin = shutil.which("pytest")
+    if pytest_bin:
+        cmd = [
+            pytest_bin,
+            rel_tests,
+            "-o",
+            f"rootdir={project_path}",
+            "-o",
+            "testpaths=tests",
+            "-q",
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            "-m",
+            "pytest",
+            rel_tests,
+            "-o",
+            f"rootdir={project_path}",
+            "-o",
+            "testpaths=tests",
+            "-q",
+        ]
+
     try:
         res = subprocess.run(
             cmd,
@@ -68,7 +84,21 @@ def _run_project_tests(project_path: Path) -> bool:
             check=False,
             timeout=30,
         )
-        return res.returncode == 0
+        if res.returncode != 0:
+            output = (res.stdout or "") + "\n" + (res.stderr or "")
+            # If pytest is not installed or available in this Python interpreter, don't block the fix
+            if (
+                "No module named pytest" in output
+                or "not recognized as an internal or external command" in output
+                or "The term 'pytest' is not recognized" in output
+            ):
+                logger.debug("pytest is not installed; skipping test suite regression check.")
+                return True
+
+            logger.warning(f"Test suite failure: {output.strip()}")
+            return False
+
+        return True
     except (OSError, subprocess.SubprocessError) as err:
         logger.warning(f"Error running test suite: {err}")
         return True

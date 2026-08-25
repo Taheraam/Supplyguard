@@ -38,9 +38,29 @@ console = Console(stderr=True, force_terminal=True)
 logger = logging.getLogger(__name__)
 
 
+def _path_in_ignore(file_path: str, ignore_paths: list[str]) -> bool:
+    """Check if a file path matches any ignore pattern from config.
+
+    Args:
+        file_path: Relative file path from a finding.
+        ignore_paths: List of patterns from .supplyguard.yml.
+
+    Returns:
+        True if the path should be excluded from results.
+    """
+    normalized = file_path.replace("\\", "/")
+    for pattern in ignore_paths:
+        clean = pattern.strip().rstrip("/")
+        if normalized.startswith(clean + "/") or normalized == clean:
+            return True
+        if "/" not in clean and clean in normalized.split("/"):
+            return True
+    return False
+
+
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logging.")
-@click.version_option(version="0.3.0")
+@click.version_option(version="0.3.1")
 def main(verbose: bool = False) -> None:
     """SupplyGuard — AI-Aware Software Supply Chain Security Scanner & Self-Heal Engine."""
     level = logging.DEBUG if verbose else logging.WARNING
@@ -203,8 +223,8 @@ def _run_scan(
         # 2. Parallel Secrets + SAST
         task_parallel = progress.add_task("Running Secrets + SAST scans...", total=None)
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            f_secrets = executor.submit(scan_secrets, project_path)
-            f_sast = executor.submit(run_sast, project_path)
+            f_secrets = executor.submit(scan_secrets, project_path, True, config.ignore_paths)
+            f_sast = executor.submit(run_sast, project_path, None, False, True, config.ignore_paths)
             secrets = f_secrets.result()
             sast_findings = f_sast.result()
         progress.update(
@@ -300,6 +320,8 @@ def _run_scan(
     for s in secrets:
         if "CWE-798" in config.ignore_rules or s.rule_id in config.ignore_rules:
             continue
+        if _path_in_ignore(s.file, config.ignore_paths):
+            continue
         all_findings.append({
             "source": "secrets",
             "severity": "CRITICAL",
@@ -314,6 +336,8 @@ def _run_scan(
         if not severity_meets_minimum(sa.severity, config.severity_minimum):
             continue
         if sa.rule_id in config.ignore_rules or sa.cwe in config.ignore_rules:
+            continue
+        if _path_in_ignore(sa.file, config.ignore_paths):
             continue
         all_findings.append({
             "source": "sast",
