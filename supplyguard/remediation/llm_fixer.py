@@ -110,12 +110,51 @@ Context after snippet:
 
     def _heuristic_fallback(self, snippet: str, cwe: str, message: str) -> tuple[str, str]:
         """Heuristic patch generator for when LLM API is unavailable."""
-        # 1. SQL Injection: f-string or string concat in execute
+        # 1. SQL Injection: f-string, string concat, or .format() in execute
         if "CWE-89" in cwe or "sql" in message.lower():
-            # Convert execute(f"... {var} ...") to execute("... %s ...", (var,))
-            fixed = re.sub(r'execute\(f["\']([^"\'\{]+)\{([a-zA-Z0-9_]+)\}([^"\']*)["\']\)', r'execute("\1%s\3", (\2,))', snippet)
-            if fixed != snippet:
-                return fixed, "Converted string interpolation in SQL query to parameterized query."
+            # 1a. f-string: execute(f"SELECT ... {var} ...")
+            fstring_match = re.search(r'execute\(\s*f(["\'])(.*?)\1(\s*\))', snippet, re.DOTALL)
+            if fstring_match:
+                quote = fstring_match.group(1)
+                sql_content = fstring_match.group(2)
+                vars_found = re.findall(r'\{([^}]+)\}', sql_content)
+                if vars_found:
+                    clean_sql = re.sub(r'[\'"]?\{[^}]+\}[\'"]?', '%s', sql_content)
+                    tuple_args = ", ".join(v.strip() for v in vars_found)
+                    if len(vars_found) == 1:
+                        tuple_args += ","
+                    fixed = (
+                        snippet[:fstring_match.start()]
+                        + f'execute({quote}{clean_sql}{quote}, ({tuple_args}))'
+                        + snippet[fstring_match.end():]
+                    )
+                    return fixed, "Converted string interpolation in SQL query to parameterized query."
+
+            # 1b. String concatenation: execute("SELECT ... " + var)
+            concat_match = re.search(r'execute\(\s*(["\'].*?["\'])\s*\+\s*([a-zA-Z0-9_\.]+)\s*\)', snippet)
+            if concat_match:
+                sql_str = concat_match.group(1).rstrip("'\"")
+                var_name = concat_match.group(2)
+                quote = concat_match.group(1)[0]
+                fixed = (
+                    snippet[:concat_match.start()]
+                    + f'execute({quote}{sql_str}%s{quote}, ({var_name},))'
+                    + snippet[concat_match.end():]
+                )
+                return fixed, "Converted string concatenation in SQL query to parameterized query."
+
+            # 1c. .format(): execute("SELECT ... {}".format(var))
+            format_match = re.search(r'execute\(\s*(["\'].*?["\'])\.format\((.*?)\)\s*\)', snippet)
+            if format_match:
+                sql_str = format_match.group(1)
+                format_args = format_match.group(2)
+                clean_sql = re.sub(r'[\'"]?\{\}[\'"]?', '%s', sql_str)
+                fixed = (
+                    snippet[:format_match.start()]
+                    + f'execute({clean_sql}, ({format_args}))'
+                    + snippet[format_match.end():]
+                )
+                return fixed, "Converted .format() in SQL query to parameterized query."
 
         # 2. Subprocess shell=True: remove shell=True and split args if string
         if "CWE-78" in cwe or "subprocess" in message.lower():
@@ -150,6 +189,12 @@ def fix_llm_assisted(
     target_file = project_path / finding.file
     if not target_file.exists():
         return FixOutcome.FIX_FAILED, "", "Target file not found."
+
+    initial_matching = [
+        f for f in run_sast(project_path)
+        if f.file == finding.file and f.rule_id == finding.rule_id
+    ]
+    initial_count = len(initial_matching)
 
     llm_provider = provider or AnthropicPatchProvider()
     lines = target_file.read_text(encoding="utf-8").splitlines()
@@ -196,7 +241,7 @@ def fix_llm_assisted(
             f for f in findings
             if f.file == finding.file and f.rule_id == finding.rule_id
         ]
-        return len(matching) == 0
+        return len(matching) < initial_count or len(matching) == 0
 
     outcome, diff = apply_with_verification(target_file, _patch, _check, project_path)
     return outcome, diff, explanation

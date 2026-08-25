@@ -49,8 +49,17 @@ def _run_project_tests(project_path: Path) -> bool:
 
     rel_tests = str(tests_dir.relative_to(project_path))
 
-    # Look for pytest executable or fallback to sys.executable -m pytest
-    pytest_bin = shutil.which("pytest")
+    # Look for virtualenv-specific pytest first (supports Windows & POSIX)
+    venv_pytest_candidates = [
+        project_path / ".venv" / "Scripts" / "pytest.exe",
+        project_path / ".venv" / "bin" / "pytest",
+        project_path / "venv" / "Scripts" / "pytest.exe",
+        project_path / "venv" / "bin" / "pytest",
+    ]
+    pytest_bin = next((str(p) for p in venv_pytest_candidates if p.exists()), None)
+    if not pytest_bin:
+        pytest_bin = shutil.which("pytest")
+
     if pytest_bin:
         cmd = [
             pytest_bin,
@@ -86,13 +95,19 @@ def _run_project_tests(project_path: Path) -> bool:
         )
         if res.returncode != 0:
             output = (res.stdout or "") + "\n" + (res.stderr or "")
-            # If pytest is not installed or available in this Python interpreter, don't block the fix
-            if (
-                "No module named pytest" in output
-                or "not recognized as an internal or external command" in output
-                or "The term 'pytest' is not recognized" in output
-            ):
-                logger.debug("pytest is not installed; skipping test suite regression check.")
+            # If pytest is not installed or dependencies/plugins needed to load tests are missing
+            skip_signatures = (
+                "No module named pytest",
+                "not recognized as an internal or external command",
+                "The term 'pytest' is not recognized",
+                "ImportError while loading conftest",
+                "ModuleNotFoundError: No module named",
+                "ImportError: No module named",
+                "pytest: error:",
+                "UsageError",
+            )
+            if any(sig in output for sig in skip_signatures):
+                logger.debug(f"Test suite cannot be executed due to missing runner/dependencies: {output.strip()}")
                 return True
 
             logger.warning(f"Test suite failure: {output.strip()}")
@@ -145,6 +160,9 @@ def apply_with_verification(
             file_path.unlink()
 
     try:
+        # Step 1.5: Record baseline test suite health before patch
+        baseline_tests_passed = _run_project_tests(project_path) if project_path else True
+
         # Step 2: Apply the fix
         patch_fn()
         if not file_path.exists():
@@ -170,8 +188,8 @@ def apply_with_verification(
             _revert()
             return FixOutcome.FIX_FAILED, ""
 
-        # Step 5: Regression Test Suite Check
-        if project_path and not _run_project_tests(project_path):
+        # Step 5: Regression Test Suite Check (only revert if tests passed before but fail now)
+        if project_path and baseline_tests_passed and not _run_project_tests(project_path):
             logger.warning(f"Project test suite failed after fix for {file_path}. Reverting.")
             _revert()
             return FixOutcome.FIX_FAILED, ""

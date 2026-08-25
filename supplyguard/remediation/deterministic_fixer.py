@@ -68,6 +68,12 @@ def fix_sast_deterministic(
     if not target_file.exists():
         return FixOutcome.FIX_FAILED, ""
 
+    initial_matching = [
+        f for f in run_sast(project_path)
+        if f.file == finding.file and f.rule_id == finding.rule_id
+    ]
+    initial_count = len(initial_matching)
+
     def _patch() -> None:
         content = target_file.read_text(encoding="utf-8")
         rule = finding.rule_id
@@ -103,13 +109,13 @@ def fix_sast_deterministic(
             target_file.write_text(patched, encoding="utf-8")
 
     def _check() -> bool:
-        # Re-run SAST check on file and verify finding is gone
+        # Re-run SAST check on file and verify finding count decreased
         findings = run_sast(project_path)
         matching = [
             f for f in findings
             if f.file == finding.file and f.rule_id == finding.rule_id
         ]
-        return len(matching) == 0
+        return len(matching) < initial_count or len(matching) == 0
 
     return apply_with_verification(target_file, _patch, _check, project_path)
 

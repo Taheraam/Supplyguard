@@ -60,7 +60,7 @@ def _path_in_ignore(file_path: str, ignore_paths: list[str]) -> bool:
 
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logging.")
-@click.version_option(version="0.3.1")
+@click.version_option(version="0.3.2")
 def main(verbose: bool = False) -> None:
     """SupplyGuard — AI-Aware Software Supply Chain Security Scanner & Self-Heal Engine."""
     level = logging.DEBUG if verbose else logging.WARNING
