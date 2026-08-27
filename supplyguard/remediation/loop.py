@@ -10,9 +10,8 @@ from supplyguard.models import RemediationAttempt
 from supplyguard.remediation.classifier import (
     FixStrategy,
     classify,
-    is_coupled_ecosystem,
-    is_example_or_test_path,
     is_major_version_bump,
+    is_test_file,
 )
 from supplyguard.remediation.deterministic_fixer import (
     fix_dependency,
@@ -84,10 +83,10 @@ def _scan_all(
 def _get_manual_reason(finding: Any) -> str:
     """Generate clear, actionable reason why a finding is manual-required."""
     target_file = getattr(finding, "file", getattr(finding, "file_path", None))
-    if target_file and is_example_or_test_path(str(target_file)):
+    if target_file and is_test_file(str(target_file)):
         return (
-            f"File '{target_file}' is in an example/test/fixture directory; "
-            "automated changes to non-production code are disabled."
+            f"File '{target_file}' is in an automated test suite; "
+            "automated modifications to test files are disabled."
         )
 
     if isinstance(finding, VulnMatch):
@@ -97,11 +96,6 @@ def _get_manual_reason(finding: Any) -> str:
             return (
                 f"Upgrading {finding.package} from {finding.version} to {finding.fixed_version} "
                 "crosses a major version boundary (potential breaking change). Manual architectural review required."
-            )
-        if is_coupled_ecosystem(finding.package):
-            return (
-                f"Package {finding.package} is part of a tightly-coupled ecosystem. "
-                "Coordinated manual upgrade across all coupled dependencies required."
             )
         return f"Dependency {finding.package} requires manual review."
 

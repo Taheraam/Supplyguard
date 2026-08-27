@@ -43,23 +43,21 @@ class FixStrategy(str, Enum):
     HYBRID = "HYBRID"
 
 
-def is_example_or_test_path(file_path: str | None) -> bool:
-    """Check if a file path is within test, example, fixture, or demo directories.
+def is_test_file(file_path: str | None) -> bool:
+    """Check if a file is an automated test suite file (e.g. tests/test_*.py).
 
     Args:
         file_path: Relative or absolute path string.
 
     Returns:
-        True if file is in a non-production directory, False otherwise.
+        True if file is in a dedicated tests/ test suite, False otherwise.
     """
     if not file_path:
         return False
-    parts = Path(file_path).parts
-    for part in parts:
-        clean_part = part.lower().strip()
-        if clean_part in NON_PRODUCTION_DIR_NAMES or any(
-            clean_part.startswith(prefix) for prefix in ("test_", "demo_", "example_")
-        ):
+    parts = [p.lower() for p in Path(file_path).parts]
+    if "tests" in parts or "test" in parts:
+        name = Path(file_path).name.lower()
+        if name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py":
             return True
     return False
 
@@ -72,7 +70,7 @@ def is_major_version_bump(current_version: str, fixed_version: str | None) -> bo
         fixed_version: Proposed target version string.
 
     Returns:
-        True if the upgrade is a major or breaking version bump, False otherwise.
+        True if the upgrade is a major or breaking version bump (e.g. 0.x -> 1.x or 1.x -> 2.x), False otherwise.
     """
     if not current_version or not fixed_version:
         return False
@@ -82,12 +80,8 @@ def is_major_version_bump(current_version: str, fixed_version: str | None) -> bo
         curr = Version(current_version)
         fixed = Version(fixed_version)
 
-        # For >= 1.0 releases, major bump is curr.major != fixed.major
+        # Cross-major boundary: 0.x -> 1.x, 1.x -> 2.x, etc.
         if curr.major != fixed.major:
-            return True
-
-        # In 0.x (pre-1.0), minor version increments represent breaking changes
-        if curr.major == 0 and fixed.major == 0 and curr.minor != fixed.minor:
             return True
 
         return False
@@ -95,32 +89,13 @@ def is_major_version_bump(current_version: str, fixed_version: str | None) -> bo
         return False
 
 
-def is_coupled_ecosystem(package_name: str) -> bool:
-    """Check if a package is part of a tightly-coupled ecosystem requiring coordinated updates.
-
-    Args:
-        package_name: Name of the package to check.
-
-    Returns:
-        True if package belongs to a coupled ecosystem, False otherwise.
-    """
-    if not package_name:
-        return False
-    pkg = package_name.lower().strip()
-    return any(
-        pkg == p or pkg.startswith(f"{p}-") or pkg.startswith(f"{p}_")
-        for p in COUPLED_ECOSYSTEM_PREFIXES
-    )
-
-
 def classify(finding: Any) -> FixStrategy:
     """Classify a finding into its appropriate remediation strategy.
 
     Classification Mapping:
-        - Findings in example/test/fixture directories -> MANUAL_REQUIRED
-        - OSV Dependency with major version bump -> MANUAL_REQUIRED (breaking change)
-        - OSV Dependency in coupled ecosystem -> MANUAL_REQUIRED (requires coordinated update)
-        - OSV Dependency with compatible fixed_version -> DETERMINISTIC
+        - Test suite runner files (tests/test_*.py) -> MANUAL_REQUIRED
+        - OSV Dependency with major version bump (e.g. 0.x -> 1.x) -> MANUAL_REQUIRED (breaking change)
+        - OSV Dependency with compatible fixed_version (same major series) -> DETERMINISTIC
         - OSV Dependency without fixed_version -> MANUAL_REQUIRED
         - Hardcoded Secret (CWE-798) in production code -> HYBRID
         - CWE-295 (verify=False) -> DETERMINISTIC
@@ -140,10 +115,10 @@ def classify(finding: Any) -> FixStrategy:
     Returns:
         FixStrategy enum member.
     """
-    # 0. Path-based check: Test, example, fixture, and demo files must never be auto-modified
+    # 0. Path-based check: Test suite runner files must never be auto-modified
     target_file = getattr(finding, "file", getattr(finding, "file_path", None))
-    if target_file and is_example_or_test_path(str(target_file)):
-        logger.info(f"Skipping auto-remediation for test/example file: {target_file}")
+    if target_file and is_test_file(str(target_file)):
+        logger.info(f"Skipping auto-remediation for test suite file: {target_file}")
         return FixStrategy.MANUAL_REQUIRED
 
     # 1. OSV Vulnerabilities
@@ -155,13 +130,6 @@ def classify(finding: Any) -> FixStrategy:
             logger.warning(
                 f"Breaking change warning: {finding.package} upgrade "
                 f"({finding.version} -> {finding.fixed_version}) crosses a major version boundary. "
-                "Classified as MANUAL_REQUIRED."
-            )
-            return FixStrategy.MANUAL_REQUIRED
-
-        if is_coupled_ecosystem(finding.package):
-            logger.warning(
-                f"Coupled ecosystem warning: {finding.package} belongs to a coupled ecosystem. "
                 "Classified as MANUAL_REQUIRED."
             )
             return FixStrategy.MANUAL_REQUIRED

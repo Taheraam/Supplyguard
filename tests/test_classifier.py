@@ -3,9 +3,8 @@
 from supplyguard.remediation.classifier import (
     FixStrategy,
     classify,
-    is_coupled_ecosystem,
-    is_example_or_test_path,
     is_major_version_bump,
+    is_test_file,
 )
 from supplyguard.sast.scanner import SastFinding
 from supplyguard.secrets.scanner import SecretFinding
@@ -26,65 +25,44 @@ def test_classify_osv_major_version_bump_is_manual() -> None:
     major_bump = VulnMatch("somepkg", "1.2.0", "CVE-1", "HIGH", "summary", fixed_version="2.0.0")
     # Pre-1.0 jump 0.3.x -> 1.x
     pre_1_jump = VulnMatch("somepkg", "0.3.13", "CVE-2", "HIGH", "summary", fixed_version="1.0.0")
-    # Pre-1.0 minor increment 0.2.x -> 0.3.x
-    pre_1_minor = VulnMatch("somepkg", "0.2.60", "CVE-3", "HIGH", "summary", fixed_version="0.3.0")
 
     assert classify(major_bump) == FixStrategy.MANUAL_REQUIRED
     assert classify(pre_1_jump) == FixStrategy.MANUAL_REQUIRED
-    assert classify(pre_1_minor) == FixStrategy.MANUAL_REQUIRED
 
 
-def test_classify_coupled_ecosystem_is_manual() -> None:
-    # Langchain ecosystem members require manual holistic alignment
-    lc_fix = VulnMatch("langchain", "0.3.13", "CVE-1", "HIGH", "summary", fixed_version="0.3.14")
-    lg_fix = VulnMatch("langgraph", "0.2.60", "CVE-2", "HIGH", "summary", fixed_version="0.2.61")
-    ls_fix = VulnMatch("langsmith", "0.2.3", "CVE-3", "HIGH", "summary", fixed_version="0.2.4")
+def test_classify_in_series_bump_is_deterministic() -> None:
+    # In-series safe bumps should be auto-remediated
+    lc_fix = VulnMatch("langchain", "0.3.13", "CVE-1", "HIGH", "summary", fixed_version="0.3.30")
+    lc_core_fix = VulnMatch("langchain-core", "0.3.29", "CVE-2", "HIGH", "summary", fixed_version="0.3.85")
 
-    assert classify(lc_fix) == FixStrategy.MANUAL_REQUIRED
-    assert classify(lg_fix) == FixStrategy.MANUAL_REQUIRED
-    assert classify(ls_fix) == FixStrategy.MANUAL_REQUIRED
+    assert classify(lc_fix) == FixStrategy.DETERMINISTIC
+    assert classify(lc_core_fix) == FixStrategy.DETERMINISTIC
 
 
-def test_classify_example_and_test_paths_are_manual() -> None:
-    # Any finding in examples/, tests/, fixtures/ must be MANUAL_REQUIRED
-    sast_in_example = SastFinding(
-        "examples/bad_pr/invoice_service.bad.py", 44, "ai-sql-injection-concat", "HIGH", "CWE-89", "SQLi"
-    )
+def test_classify_test_suite_paths_are_manual() -> None:
+    # Findings in automated test suite files (tests/test_*.py) must be MANUAL_REQUIRED
     sast_in_tests = SastFinding(
-        "tests/fixtures/mock_server.py", 12, "ai-requests-verify-false", "MEDIUM", "CWE-295", "verify=False"
+        "tests/test_server.py", 12, "ai-requests-verify-false", "MEDIUM", "CWE-295", "verify=False"
     )
-    secret_in_demo = SecretFinding("demo/setup.py", 5, "aws-key", "AKIA...XYZ")
-
-    assert classify(sast_in_example) == FixStrategy.MANUAL_REQUIRED
     assert classify(sast_in_tests) == FixStrategy.MANUAL_REQUIRED
-    assert classify(secret_in_demo) == FixStrategy.MANUAL_REQUIRED
 
 
-def test_is_example_or_test_path() -> None:
-    assert is_example_or_test_path("examples/bad_pr/test.py") is True
-    assert is_example_or_test_path("tests/unit/test_app.py") is True
-    assert is_example_or_test_path("fixtures/data.json") is True
-    assert is_example_or_test_path("src/api/routes.py") is False
-    assert is_example_or_test_path("app.py") is False
+def test_is_test_file() -> None:
+    assert is_test_file("tests/test_app.py") is True
+    assert is_test_file("tests/unit/test_auth.py") is True
+    assert is_test_file("tests/conftest.py") is True
+    assert is_test_file("examples/bad_pr/test.py") is False
+    assert is_test_file("src/api/routes.py") is False
+    assert is_test_file("app.py") is False
 
 
 def test_is_major_version_bump() -> None:
     assert is_major_version_bump("1.0.0", "2.0.0") is True
     assert is_major_version_bump("0.3.13", "1.3.9") is True
-    assert is_major_version_bump("0.2.60", "0.3.0") is True
+    assert is_major_version_bump("0.3.13", "0.3.30") is False
     assert is_major_version_bump("1.2.0", "1.2.1") is False
     assert is_major_version_bump("1.2.0", "1.3.0") is False
     assert is_major_version_bump("2.25.1", "2.31.0") is False
-
-
-def test_is_coupled_ecosystem() -> None:
-    assert is_coupled_ecosystem("langchain") is True
-    assert is_coupled_ecosystem("langchain-core") is True
-    assert is_coupled_ecosystem("langchain-groq") is True
-    assert is_coupled_ecosystem("langgraph") is True
-    assert is_coupled_ecosystem("langsmith") is True
-    assert is_coupled_ecosystem("requests") is False
-    assert is_coupled_ecosystem("fastapi") is False
 
 
 def test_classify_secrets() -> None:
