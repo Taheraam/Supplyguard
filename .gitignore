@@ -84,3 +84,10 @@ desktop.ini
 SupplyGuard_Antigravity_Build_Plan.md
 SupplyGuard_v2_Remediation_Build_Plan.md
 implementation_plan_v1
+DiffUserReport.md
+diffuserreport*
+software-supply-chain-security-report.md
+
+# Local Demo & Manual Test Workspaces
+Demotesting/
+demotesting/
