@@ -11,6 +11,36 @@ from supplyguard.secrets.scanner import SecretFinding
 logger = logging.getLogger(__name__)
 
 
+def _verify_requirements_txt(req_path: Path) -> bool:
+    """Verify that requirements.txt is syntactically valid and has no duplicate conflicting pins.
+
+    Args:
+        req_path: Path to requirements.txt.
+
+    Returns:
+        True if requirements file is valid, False otherwise.
+    """
+    try:
+        lines = req_path.read_text(encoding="utf-8").splitlines()
+        seen_packages: dict[str, str] = {}
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("#"):
+                continue
+            if "==" in line_str:
+                pkg_name, ver = line_str.split("==", 1)
+                pkg_clean = pkg_name.strip().lower()
+                ver_clean = ver.strip()
+                if pkg_clean in seen_packages and seen_packages[pkg_clean] != ver_clean:
+                    logger.warning(f"Conflicting duplicate package pins found for {pkg_clean}")
+                    return False
+                seen_packages[pkg_clean] = ver_clean
+        return True
+    except Exception as err:
+        logger.warning(f"Error parsing requirements.txt: {err}")
+        return False
+
+
 def fix_dependency(
     project_path: Path, package_name: str, fixed_version: str
 ) -> tuple[FixOutcome, str]:
@@ -41,7 +71,33 @@ def fix_dependency(
 
     def _check() -> bool:
         content = req_path.read_text(encoding="utf-8")
-        return f"{package_name}=={fixed_version}" in content
+        if f"{package_name}=={fixed_version}" not in content:
+            return False
+
+        if not _verify_requirements_txt(req_path):
+            return False
+
+        import subprocess
+        import sys
+
+        try:
+            res = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--dry-run", "--no-deps", "-r", str(req_path)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=False,
+            )
+            if res.returncode != 0:
+                logger.warning(f"pip install --dry-run validation failed: {res.stderr}")
+                return False
+        except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError) as err:
+            logger.warning(f"Dry-run pip verification skipped due to environment constraint: {err}")
+        except Exception as err:
+            logger.warning(f"Unexpected error during requirements validation: {err}")
+            return False
+
+        return True
 
     return apply_with_verification(req_path, _patch, _check, project_path)
 

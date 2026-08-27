@@ -67,3 +67,23 @@ def test_batch_query_with_vulnerability_match() -> None:
 
 def test_batch_query_empty_components() -> None:
     assert batch_query([]) == []
+
+
+def test_select_minimum_compatible_version() -> None:
+    from supplyguard.vulns.osv_client import select_minimum_compatible_version
+
+    # Patch bump preferred over minor and major
+    assert select_minimum_compatible_version("0.3.13", ["1.3.9", "0.4.0", "0.3.14"]) == "0.3.14"
+
+    # Minor bump preferred over major bump
+    assert select_minimum_compatible_version("0.3.13", ["1.3.9", "0.4.0"]) == "0.4.0"
+
+    # Same major, lowest patch
+    assert select_minimum_compatible_version("1.2.0", ["2.0.0", "1.3.0", "1.2.5"]) == "1.2.5"
+
+    # Fallback to lowest newer major when no same major exists
+    assert select_minimum_compatible_version("1.2.0", ["3.0.0", "2.0.0"]) == "2.0.0"
+
+    # Empty candidate list
+    assert select_minimum_compatible_version("1.0.0", []) is None
+

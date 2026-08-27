@@ -124,28 +124,105 @@ def _cvss_to_rating(cvss_vector: str) -> str:
     return "MEDIUM"
 
 
-def _extract_fixed_version(
-    vuln_data: dict[str, Any], package_name: str
+def select_minimum_compatible_version(
+    current_version: str, candidate_versions: list[str]
 ) -> str | None:
-    """Find the fixed version from affected ranges in an OSV record.
+    """Select the minimum compatible fixed version prioritizing patch > minor > major bumps.
+
+    Args:
+        current_version: Current installed version string.
+        candidate_versions: List of fixed version candidate strings.
+
+    Returns:
+        Best fixed version string, or None if no valid candidate found.
+    """
+    if not candidate_versions:
+        return None
+
+    try:
+        from packaging.version import InvalidVersion, Version
+
+        try:
+            curr_v = Version(current_version)
+        except InvalidVersion:
+            return candidate_versions[0]
+
+        parsed_candidates: list[tuple[Version, str]] = []
+        for cand in candidate_versions:
+            try:
+                parsed_candidates.append((Version(cand), cand))
+            except InvalidVersion:
+                continue
+
+        if not parsed_candidates:
+            return candidate_versions[0]
+
+        strictly_newer = [c for c in parsed_candidates if c[0] > curr_v]
+        target_pool = strictly_newer if strictly_newer else parsed_candidates
+
+        # 1. Same major, same minor (patch bump)
+        same_major_same_minor = [
+            c for c in target_pool
+            if c[0].major == curr_v.major and c[0].minor == curr_v.minor
+        ]
+        if same_major_same_minor:
+            same_major_same_minor.sort(key=lambda x: x[0])
+            return same_major_same_minor[0][1]
+
+        # 2. Same major, newer minor (minor bump)
+        same_major_newer_minor = [
+            c for c in target_pool
+            if c[0].major == curr_v.major and c[0].minor > curr_v.minor
+        ]
+        if same_major_newer_minor:
+            same_major_newer_minor.sort(key=lambda x: x[0])
+            return same_major_newer_minor[0][1]
+
+        # 3. Same major
+        same_major = [c for c in target_pool if c[0].major == curr_v.major]
+        if same_major:
+            same_major.sort(key=lambda x: x[0])
+            return same_major[0][1]
+
+        # 4. Lowest newer version
+        target_pool.sort(key=lambda x: x[0])
+        return target_pool[0][1]
+
+    except Exception:
+        return candidate_versions[0]
+
+
+def _extract_fixed_version(
+    vuln_data: dict[str, Any], package_name: str, current_version: str | None = None
+) -> str | None:
+    """Find the minimum compatible fixed version from affected ranges in an OSV record.
 
     Args:
         vuln_data: Full OSV vulnerability JSON dictionary.
         package_name: Name of the package to match.
+        current_version: Current installed version string, if available.
 
     Returns:
         Fixed version string if found, otherwise None.
     """
     affected_list = vuln_data.get("affected", [])
+    candidates: list[str] = []
     for aff in affected_list:
         pkg = aff.get("package", {})
         if pkg.get("name", "").lower() == package_name.lower():
             for rng in aff.get("ranges", []):
                 for event in rng.get("events", []):
                     fixed = event.get("fixed")
-                    if fixed:
-                        return str(fixed)
-    return None
+                    if fixed and str(fixed).strip() and str(fixed).strip() not in candidates:
+                        candidates.append(str(fixed).strip())
+
+    if not candidates:
+        return None
+
+    if not current_version:
+        return candidates[0]
+
+    return select_minimum_compatible_version(current_version, candidates)
 
 
 def _fetch_vuln_detail(
@@ -167,7 +244,7 @@ def _fetch_vuln_detail(
         data = resp.json()
         summary = data.get("summary") or data.get("details", "")[:200]
         severity = _extract_severity(data)
-        fixed_version = _extract_fixed_version(data, package)
+        fixed_version = _extract_fixed_version(data, package, current_version=version)
         return VulnMatch(
             package=package,
             version=version,

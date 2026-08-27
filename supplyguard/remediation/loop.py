@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from supplyguard.models import RemediationAttempt
-from supplyguard.remediation.classifier import FixStrategy, classify
+from supplyguard.remediation.classifier import (
+    FixStrategy,
+    classify,
+    is_coupled_ecosystem,
+    is_example_or_test_path,
+    is_major_version_bump,
+)
 from supplyguard.remediation.deterministic_fixer import (
     fix_dependency,
     fix_sast_deterministic,
@@ -77,8 +83,28 @@ def _scan_all(
 
 def _get_manual_reason(finding: Any) -> str:
     """Generate clear, actionable reason why a finding is manual-required."""
+    target_file = getattr(finding, "file", getattr(finding, "file_path", None))
+    if target_file and is_example_or_test_path(str(target_file)):
+        return (
+            f"File '{target_file}' is in an example/test/fixture directory; "
+            "automated changes to non-production code are disabled."
+        )
+
     if isinstance(finding, VulnMatch):
-        return f"Vulnerability in {finding.package} has no published fix_version yet."
+        if not finding.fixed_version:
+            return f"Vulnerability in {finding.package} has no published fix_version yet."
+        if is_major_version_bump(finding.version, finding.fixed_version):
+            return (
+                f"Upgrading {finding.package} from {finding.version} to {finding.fixed_version} "
+                "crosses a major version boundary (potential breaking change). Manual architectural review required."
+            )
+        if is_coupled_ecosystem(finding.package):
+            return (
+                f"Package {finding.package} is part of a tightly-coupled ecosystem. "
+                "Coordinated manual upgrade across all coupled dependencies required."
+            )
+        return f"Dependency {finding.package} requires manual review."
+
     if isinstance(finding, SastFinding):
         if "admin" in finding.rule_id or "CWE-862" in finding.cwe:
             return "Missing authorization logic requires developer architecture decision for intended auth scheme."
@@ -86,6 +112,7 @@ def _get_manual_reason(finding: Any) -> str:
             return "Dynamic code execution or pickle deserialization is context-dependent and requires architectural refactoring."
         if "cors" in finding.rule_id or "CWE-942" in finding.cwe:
             return "CORS configuration requires explicit whitelist of authorized domain origins."
+
     return "Requires manual human security review."
 
 

@@ -74,3 +74,16 @@ def test_fix_secret_hybrid(tmp_path: Path) -> None:
     assert env_example.exists()
     assert "SECRET_AWS_ACCESS_KEY=" in env_example.read_text(encoding="utf-8")
     assert "Rotate the leaked credential" in notice
+
+
+def test_verify_requirements_txt(tmp_path: Path) -> None:
+    from supplyguard.remediation.deterministic_fixer import _verify_requirements_txt
+
+    valid_req = tmp_path / "valid_req.txt"
+    valid_req.write_text("requests==2.31.0\nflask==3.0.0\n# comment\n", encoding="utf-8")
+    assert _verify_requirements_txt(valid_req) is True
+
+    conflict_req = tmp_path / "conflict_req.txt"
+    conflict_req.write_text("requests==2.25.1\nrequests==2.31.0\n", encoding="utf-8")
+    assert _verify_requirements_txt(conflict_req) is False
+
