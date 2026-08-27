@@ -6,7 +6,7 @@
 
 **Software Supply Chain Security Scanner & Self-Healing Remediation Engine**
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.3.2-blue.svg?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/supplyguard/)
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.3.4-blue.svg?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/supplyguard/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![CI Security Gate](https://img.shields.io/badge/CI%20Gate-Passing-success.svg?style=flat-square&logo=githubactions&logoColor=white)](https://github.com/Taheraam/Supplyguard/actions)
@@ -14,7 +14,7 @@
 
 <p align="center">
   Detect supply chain vulnerabilities, leaked credentials, and AI-generated code smells in seconds.<br>
-  Compute an auditable 0–100 risk score, enforce CI/CD quality gates, and safely auto-patch fixable findings with test-backed rollbacks.
+  Compute an auditable 0–100 risk score, enforce CI/CD quality gates, and safely auto-patch fixable findings with test-backed rollbacks and SemVer-aware version selection.
 </p>
 
 [Quickstart](#quickstart) •
@@ -36,7 +36,7 @@ Modern software development relies heavily on third-party dependencies and AI co
 - Leaked API keys, database credentials, and access tokens committed to version control
 - Antipatterns common in AI-generated code: unparameterized SQL queries, dynamic subprocess execution with `shell=True`, disabled TLS certificate verification, and unverified JWT decoding
 
-SupplyGuard addresses this by scanning codebases across four synchronized security dimensions, unifying findings into a weighted 0–100 risk score, exporting compliant SARIF reports for GitHub Code Scanning, and providing an automated remediation loop with built-in AST verification and rollback safety.
+SupplyGuard addresses this by scanning codebases across four synchronized security dimensions, unifying findings into a weighted 0–100 risk score, exporting compliant SARIF reports for GitHub Code Scanning, and providing an automated remediation loop with built-in SemVer-aware version resolution, AST verification, and rollback safety.
 
 ---
 
@@ -46,7 +46,8 @@ SupplyGuard addresses this by scanning codebases across four synchronized securi
 - **OSV.dev Vulnerability Correlation**: Real-time batch queries against the Open Source Vulnerability database for up-to-date CVE matching.
 - **Zero-Leak Secrets Scanner**: Pattern matching for API tokens and credentials with strict zero-leakage redaction (`first 3 + ... + last 3 chars`).
 - **AI-Code Smell SAST**: Static analysis rules targeting security weaknesses common in LLM-assisted codebases (CWE-89, CWE-78, CWE-295, CWE-489, CWE-347, CWE-916, CWE-330).
-- **Self-Healing Remediation**: Automated patch generation backed by an in-memory backup and AST verifier that rolls back any modification that introduces syntax errors or test regressions.
+- **SemVer-Aware Remediation**: Intelligent dependency resolution selecting the minimum compatible version (patch > minor > major) while preventing breaking major version jumps.
+- **Self-Healing AST & Test Verification**: Automated patch generation backed by in-memory backups, syntax parsing, dry-run dependency resolution (`pip install --dry-run`), and test-suite execution that rolls back any modification introducing errors or regressions.
 - **Native SARIF v2.1.0 & CI Gates**: Native export to SARIF for the GitHub Security tab and configurable risk threshold exit codes (`--threshold 40`).
 - **Zero-Config Execution**: Built-in fallback engines that operate out-of-the-box without requiring external binary installations.
 
@@ -297,18 +298,20 @@ graph TD
 
 ## Fixability Classification
 
-SupplyGuard maintains a strict separation between deterministic fixes and changes requiring architectural review:
+SupplyGuard maintains a strict separation between safe automated fixes and changes requiring developer architectural review:
 
 | Finding Category | CWE | Strategy | Action |
 |---|---|---|---|
-| Known Vulnerable Dependency (Fix Available) | — | **Deterministic** | Bumps pinned version in `requirements.txt`. |
-| Vulnerable Dependency (No Fix Available) | — | **Manual-Required** | Flags finding; no safe target version exists. |
+| In-Series Vulnerable Dependency (e.g. `0.3.13` ➔ `0.3.30`) | — | **Deterministic** | Selects minimum compatible version; verifies syntax & dry-run install before keeping. |
+| Major Version / Breaking Dependency Jump (e.g. `0.x` ➔ `1.x`, `1.x` ➔ `2.x`) | — | **Manual-Required** | Flagged with explanation; prevents API breaking changes in downstream code. |
+| Vulnerable Dependency (No Fix Available) | — | **Manual-Required** | Flags finding; no published fixed version exists. |
+| Test Suite Files (`tests/test_*.py`) | — | **Manual-Required** | Protected from automated edits to avoid test harness disruption. |
 | Hardcoded Secret | CWE-798 | **Hybrid** | Extracts stub to `.env.example`, redacts in place, flags key for rotation. |
 | TLS Validation Disabled (`verify=False`) | CWE-295 | **Deterministic** | Restores TLS certificate validation. |
 | Production Debug Mode (`debug=True`) | CWE-489 | **Deterministic** | Sets `debug=False`. |
 | Unverified JWT Decode | CWE-347 | **Deterministic** | Enforces signature verification checks. |
 | Insecure Randomness for Secrets | CWE-330 | **Deterministic** | Migrates `random` usage to `secrets` module. |
-| SQL Injection (String Formatting) | CWE-89 | **LLM-Assisted** | Constructs parameterized query patch gated on test suite. |
+| SQL Injection (String Formatting) | CWE-89 | **LLM-Assisted** | Constructs parameterized query patch gated on AST and test suite verification. |
 | Subprocess Shell Injection | CWE-78 | **LLM-Assisted** | Converts shell command strings to argument lists. |
 | Unprotected Sensitive Route | CWE-862 | **Manual-Required** | Escalated to developer; cannot infer authentication model. |
 | Dynamic Code Execution (`eval`/`exec`/`pickle`) | CWE-94 / 502 | **Manual-Required** | Escalated to developer; requires architectural refactoring. |
@@ -320,8 +323,8 @@ SupplyGuard maintains a strict separation between deterministic fixes and change
 
 1. **Local-Only Remediation**: `supplyguard fix` never pushes or merges changes to remote branches. All modifications remain local for developer review.
 2. **Zero Raw Secret Storage**: The secrets scanner redacts findings (`first 3 + ... + last 3 chars`) before logging, database persistence, or display.
-3. **Rollback-on-Failure**: Automated patches must pass syntax parsing and existing test suites before being kept. If verification fails, changes are reverted automatically.
-4. **No Intent Guessing**: Security-critical controls such as authentication boundaries and authorization decorators are never guessed and are flagged for manual review.
+3. **Dry-Run & Rollback-on-Failure**: Automated patches must pass syntax parsing, package dry-run checks, and existing test suites before being kept. If verification fails, changes are reverted automatically.
+4. **No Intent Guessing**: Security-critical controls such as authentication boundaries, major version jumps, and authorization decorators are never guessed and are flagged for manual review.
 
 ---
 
