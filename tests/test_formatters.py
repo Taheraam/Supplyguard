@@ -180,3 +180,21 @@ class TestFormatDispatch:
         """Unknown format name raises ValueError."""
         with pytest.raises(ValueError, match="Unknown format"):
             format_output("xml", sample_scan_output)
+
+
+def test_sarif_security_severity_uses_github_0_to_10_scale() -> None:
+    from supplyguard.formatters import _SEVERITY_TO_SARIF_RANK
+
+    # GitHub buckets: >=9.0 critical, >=7.0 high, >=4.0 medium, else low
+    assert _SEVERITY_TO_SARIF_RANK["CRITICAL"] >= 9.0
+    assert 7.0 <= _SEVERITY_TO_SARIF_RANK["HIGH"] < 9.0
+    assert 4.0 <= _SEVERITY_TO_SARIF_RANK["MEDIUM"] < 7.0
+    assert _SEVERITY_TO_SARIF_RANK["LOW"] < 4.0
+
+
+def test_tool_version_comes_from_package_metadata() -> None:
+    from importlib.metadata import version
+
+    from supplyguard.formatters import TOOL_VERSION
+
+    assert version("supplyguard") == TOOL_VERSION

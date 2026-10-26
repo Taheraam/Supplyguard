@@ -10,14 +10,17 @@ import concurrent.futures
 import datetime
 import json
 import logging
+import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import click
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
+from supplyguard import __version__
 from supplyguard.config import (
     CONFIG_FILENAME,
     SupplyGuardConfig,
@@ -32,7 +35,7 @@ from supplyguard.sast.scanner import run_sast
 from supplyguard.sbom.generator import generate_sbom
 from supplyguard.scoring.engine import calculate_risk_score
 from supplyguard.secrets.scanner import scan_secrets
-from supplyguard.vulns.osv_client import batch_query
+from supplyguard.vulns.osv_client import OsvUnavailableError, batch_query
 
 console = Console(stderr=True, force_terminal=True)
 logger = logging.getLogger(__name__)
@@ -58,9 +61,21 @@ def _path_in_ignore(file_path: str, ignore_paths: list[str]) -> bool:
     return False
 
 
+def _requirement_line(project_path: Path, package: str) -> int:
+    """Line number of `package` in requirements.txt, so SARIF alerts point at the real pin."""
+    req = project_path / "requirements.txt"
+    if not req.exists():
+        return 1
+    pattern = re.compile(rf"^{re.escape(package)}(?=[\s\[=<>!~;]|$)", re.IGNORECASE)
+    for number, raw in enumerate(req.read_text(encoding="utf-8", errors="ignore").splitlines(), start=1):
+        if pattern.match(raw.strip()):
+            return number
+    return 1
+
+
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose debug logging.")
-@click.version_option(version="0.3.2")
+@click.version_option(version=__version__, prog_name="supplyguard")
 def main(verbose: bool = False) -> None:
     """SupplyGuard — AI-Aware Software Supply Chain Security Scanner & Self-Heal Engine."""
     level = logging.DEBUG if verbose else logging.WARNING
@@ -147,16 +162,23 @@ def init_cmd(project_path: Path) -> None:
     help="Write output to file instead of stdout.",
 )
 @click.option("--db-path", type=click.Path(path_type=Path), default="supplyguard.db", help="SQLite database path.")
+@click.option(
+    "--sbom-output",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Save the CycloneDX SBOM here (default: not written into the scanned project).",
+)
 def scan_cmd(
     project_path: Path,
     output_format: str | None,
     threshold: int | None,
     output: Path | None,
     db_path: Path,
+    sbom_output: Path | None,
 ) -> None:
     """Scan a project for supply chain vulnerabilities, secrets, and code smells."""
     try:
-        _run_scan(project_path, output_format, threshold, output, db_path)
+        _run_scan(project_path, output_format, threshold, output, db_path, sbom_output)
     except KeyboardInterrupt:
         console.print("\n[yellow]Scan interrupted by user.[/]")
         sys.exit(2)
@@ -172,6 +194,7 @@ def _run_scan(
     threshold: int | None,
     output: Path | None,
     db_path: Path,
+    sbom_output: Path | None = None,
 ) -> None:
     """Internal scan implementation with proper exit codes.
 
@@ -211,7 +234,9 @@ def _run_scan(
     ) as progress:
         # 1. SBOM + OSV
         task_sbom = progress.add_task("Generating CycloneDX SBOM...", total=None)
-        _, components = generate_sbom(project_path)
+        # A scanner should not leave files behind in the repo it scans.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _, components = generate_sbom(project_path, sbom_output or Path(tmp_dir) / "bom.json")
         progress.update(task_sbom, description=f"[green]✓[/] SBOM: {len(components)} components")
         progress.stop_task(task_sbom)
 
@@ -233,95 +258,44 @@ def _run_scan(
         )
         progress.stop_task(task_parallel)
 
-    # 3. Scoring
+    # 3. Apply config filters FIRST, then score.
+    # The score (and therefore the CI gate) used to be computed on the unfiltered lists,
+    # so findings suppressed via ignore_rules / ignore_paths still failed the build.
+    vulns = [
+        v for v in vulns
+        if severity_meets_minimum(v.severity, config.severity_minimum) and v.vuln_id not in config.ignore_rules
+    ]
+    secrets = [
+        s for s in secrets
+        if "CWE-798" not in config.ignore_rules
+        and s.rule_id not in config.ignore_rules
+        and not _path_in_ignore(s.file, config.ignore_paths)
+    ]
+    sast_findings = [
+        sa for sa in sast_findings
+        if severity_meets_minimum(sa.severity, config.severity_minimum)
+        and sa.rule_id not in config.ignore_rules
+        and sa.cwe not in config.ignore_rules
+        and not _path_in_ignore(sa.file, config.ignore_paths)
+    ]
+
     score_breakdown = calculate_risk_score(vulns, secrets, sast_findings)
     finished_at = datetime.datetime.now(datetime.UTC)
 
-    # 4. Persistence
-    _, session_factory = init_db(db_path)
-    with session_factory() as session:
-        scan_rec = Scan(
-            project_path=str(project_path.resolve()),
-            started_at=started_at,
-            finished_at=finished_at,
-            risk_score=score_breakdown.total_score,
-            components_count=len(components),
-            findings_count=len(vulns) + len(secrets) + len(sast_findings),
-        )
-        session.add(scan_rec)
-        session.flush()
-
-        for v in vulns:
-            session.add(
-                Finding(
-                    scan_id=scan_rec.id,
-                    source="sbom_osv",
-                    severity=v.severity,
-                    file="requirements.txt",
-                    line=1,
-                    rule_id=v.vuln_id,
-                    cwe="CWE-1395",
-                    message=f"{v.package}=={v.version}: {v.summary}",
-                    raw_json=json.dumps({"package": v.package, "fixed": v.fixed_version}),
-                )
-            )
-
-        for s in secrets:
-            session.add(
-                Finding(
-                    scan_id=scan_rec.id,
-                    source="secrets",
-                    severity="CRITICAL",
-                    file=s.file,
-                    line=s.line,
-                    rule_id=s.rule_id,
-                    cwe="CWE-798",
-                    message=f"Hardcoded secret ({s.rule_id}): {s.match_preview}",
-                    raw_json=json.dumps({"match_preview": s.match_preview}),
-                )
-            )
-
-        for sa in sast_findings:
-            session.add(
-                Finding(
-                    scan_id=scan_rec.id,
-                    source="sast",
-                    severity=sa.severity,
-                    file=sa.file,
-                    line=sa.line,
-                    rule_id=sa.rule_id,
-                    cwe=sa.cwe,
-                    message=sa.message,
-                    raw_json=json.dumps({"rule_id": sa.rule_id, "cwe": sa.cwe}),
-                )
-            )
-
-        session.commit()
-        scan_id = scan_rec.id
-
-    # 5. Build unified findings list and apply filters
+    # 4. Build unified findings list (dependency findings point at their requirements.txt line)
     all_findings: list[dict[str, str | int]] = []
-
     for v in vulns:
-        if not severity_meets_minimum(v.severity, config.severity_minimum):
-            continue
-        if v.vuln_id in config.ignore_rules:
-            continue
         all_findings.append({
             "source": "sbom_osv",
             "severity": v.severity,
-            "file": f"{v.package}=={v.version}",
-            "line": 1,
+            "file": "requirements.txt",
+            "line": _requirement_line(project_path, v.package),
             "rule_id": v.vuln_id,
             "cwe": "CWE-1395",
-            "message": v.summary[:200] if v.summary else f"Vulnerability in {v.package}",
+            "message": f"{v.package}=={v.version}: {(v.summary or 'known vulnerability')[:180]}"
+            + (f" (fixed in {v.fixed_version})" if v.fixed_version else ""),
         })
-
     for s in secrets:
-        if "CWE-798" in config.ignore_rules or s.rule_id in config.ignore_rules:
-            continue
-        if _path_in_ignore(s.file, config.ignore_paths):
-            continue
         all_findings.append({
             "source": "secrets",
             "severity": "CRITICAL",
@@ -331,14 +305,7 @@ def _run_scan(
             "cwe": "CWE-798",
             "message": f"Hardcoded secret ({s.rule_id}): {s.match_preview}",
         })
-
     for sa in sast_findings:
-        if not severity_meets_minimum(sa.severity, config.severity_minimum):
-            continue
-        if sa.rule_id in config.ignore_rules or sa.cwe in config.ignore_rules:
-            continue
-        if _path_in_ignore(sa.file, config.ignore_paths):
-            continue
         all_findings.append({
             "source": "sast",
             "severity": sa.severity,
@@ -348,6 +315,36 @@ def _run_scan(
             "cwe": sa.cwe,
             "message": sa.message,
         })
+
+    # 5. Persistence (same findings that were scored and reported)
+    _, session_factory = init_db(db_path)
+    with session_factory() as session:
+        scan_rec = Scan(
+            project_path=str(project_path.resolve()),
+            started_at=started_at,
+            finished_at=finished_at,
+            risk_score=score_breakdown.total_score,
+            components_count=len(components),
+            findings_count=len(all_findings),
+        )
+        session.add(scan_rec)
+        session.flush()
+        for f in all_findings:
+            session.add(
+                Finding(
+                    scan_id=scan_rec.id,
+                    source=str(f["source"]),
+                    severity=str(f["severity"]),
+                    file=str(f["file"]),
+                    line=int(f["line"]),
+                    rule_id=str(f["rule_id"]),
+                    cwe=str(f["cwe"]),
+                    message=str(f["message"]),
+                    raw_json=json.dumps(f),
+                )
+            )
+        session.commit()
+        scan_id = scan_rec.id
 
     # 6. Format & output
     scan_output = ScanOutput(
@@ -427,7 +424,12 @@ def report_cmd(scan_id: int, db_path: Path, output_format: str) -> None:
             scan_id=scan_rec.id,
             project_path=scan_rec.project_path,
             risk_score=scan_rec.risk_score,
-            score_breakdown=calculate_risk_score([], [], []),  # Placeholder for stored scans
+            # Rebuild the breakdown from stored rows (the engine only needs `.severity`).
+            score_breakdown=calculate_risk_score(
+                [f for f in scan_rec.findings if f.source == "sbom_osv"],
+                [f for f in scan_rec.findings if f.source == "secrets"],
+                [f for f in scan_rec.findings if f.source == "sast"],
+            ),
             components_count=scan_rec.components_count,
             findings=findings_list,
             started_at=str(scan_rec.started_at) if scan_rec.started_at else "",
@@ -457,6 +459,10 @@ def fix_cmd(
     from rich.table import Table as RichTable
 
     console.print(f"[bold green][FIX] Remediation:[/] {project_path.resolve()}")
+    console.print(
+        "[dim]Note: `fix` runs this project's own test suite and pip resolution to verify patches. "
+        "Only run it on code you trust; `scan` never executes project code.[/]"
+    )
     if dry_run:
         console.print("[yellow bold][!] DRY-RUN MODE: No files will be modified.[/]")
 
@@ -470,14 +476,18 @@ def fix_cmd(
         session.add(scan_rec)
         session.flush()
 
-        report = remediate(
-            project_path=project_path,
-            max_iterations=max_iterations,
-            dry_run=dry_run,
-            use_llm=not no_llm,
-            session=session,
-            scan_id=scan_rec.id,
-        )
+        try:
+            report = remediate(
+                project_path=project_path,
+                max_iterations=max_iterations,
+                dry_run=dry_run,
+                use_llm=not no_llm,
+                session=session,
+                scan_id=scan_rec.id,
+            )
+        except OsvUnavailableError as err:
+            console.print(f"[bold red]Remediation aborted:[/] {err}")
+            sys.exit(2)
 
         scan_rec.finished_at = datetime.datetime.now(datetime.UTC)
         scan_rec.risk_score = report.final_score

@@ -63,19 +63,57 @@ def redact_secret(raw_secret: str) -> str:
         Redacted string preview (e.g. 'AKIA...XYZ').
     """
     clean = raw_secret.strip().strip("'\"")
-    if len(clean) <= 6:
+    # Showing 6 characters of a short secret leaks most of it (75% of an 8-char password).
+    if len(clean) < 12:
         return "***"
     return f"{clean[:3]}...{clean[-3:]}"
 
 
+def _normalize_path(raw_path: str, project_path: Path) -> str:
+    """Make a gitleaks path relative to the project so ignore_paths and SARIF URIs work."""
+    if not raw_path:
+        return raw_path
+    candidate = Path(raw_path)
+    root = project_path.resolve()
+    try:
+        absolute = candidate if candidate.is_absolute() else (Path.cwd() / candidate)
+        return absolute.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return candidate.as_posix()
+
+
+def _gitleaks(gitleaks_bin: str, project_path: Path, scan_history: bool) -> list[dict]:
+    """Run one gitleaks pass and return its raw JSON findings."""
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_file:
+        report_path = Path(tmp_file.name)
+    cmd = [
+        gitleaks_bin,
+        "detect",
+        "--source",
+        str(project_path),
+        "--report-format",
+        "json",
+        "--report-path",
+        str(report_path),
+    ]
+    if not scan_history:
+        cmd.append("--no-git")
+    try:
+        # gitleaks returns exit code 1 when leaks are found
+        subprocess.run(cmd, capture_output=True, text=True, shell=False, check=False, timeout=300)
+        if report_path.exists() and report_path.stat().st_size > 0:
+            return json.loads(report_path.read_text(encoding="utf-8"))
+        return []
+    finally:
+        if report_path.exists():
+            report_path.unlink()
+
+
 def _run_gitleaks_cli(project_path: Path) -> list[SecretFinding]:
-    """Execute gitleaks CLI against project_path and parse JSON results.
+    """Execute gitleaks against the working tree and, for git repos, the full commit history.
 
-    Args:
-        project_path: Directory path to scan.
-
-    Returns:
-        List of SecretFinding instances.
+    A secret that was committed and later deleted is still public in the history, so the
+    working tree alone (`--no-git`, the previous behaviour) misses the most common leak.
 
     Raises:
         GitleaksNotFoundError: If gitleaks is not on PATH.
@@ -87,49 +125,33 @@ def _run_gitleaks_cli(project_path: Path) -> list[SecretFinding]:
             "Please install Gitleaks: https://github.com/gitleaks/gitleaks/releases"
         )
 
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_file:
-        report_path = Path(tmp_file.name)
+    raw_items = _gitleaks(gitleaks_bin, project_path, scan_history=False)
+    if (project_path / ".git").exists():
+        raw_items += _gitleaks(gitleaks_bin, project_path, scan_history=True)
 
-    try:
-        cmd = [
-            gitleaks_bin,
-            "detect",
-            "--source",
-            str(project_path),
-            "--report-format",
-            "json",
-            "--report-path",
-            str(report_path),
-            "--no-git",
-        ]
-        # gitleaks returns exit code 1 when leaks are found
-        subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            shell=False,
-            check=False,
+    findings: list[SecretFinding] = []
+    seen: set[tuple[str, int, str, str]] = set()
+    for item in raw_items:
+        raw_match = item.get("Secret", "") or item.get("Match", "")
+        file = _normalize_path(item.get("File", ""), project_path)
+        line = int(item.get("StartLine", 1))
+        rule_id = item.get("RuleID", "generic-secret")
+        key = (file, line, rule_id, raw_match)
+        if key in seen:  # same leak found in the tree and in history
+            continue
+        seen.add(key)
+        commit = item.get("Commit", "")
+        description = item.get("Description", "Potential hardcoded secret")
+        findings.append(
+            SecretFinding(
+                file=file,
+                line=line,
+                rule_id=rule_id,
+                match_preview=redact_secret(raw_match),
+                description=f"{description} (in git history, commit {commit[:8]})" if commit else description,
+            )
         )
-
-        findings: list[SecretFinding] = []
-        if report_path.exists() and report_path.stat().st_size > 0:
-            content = report_path.read_text(encoding="utf-8")
-            data = json.loads(content)
-            for item in data:
-                raw_match = item.get("Secret", "") or item.get("Match", "")
-                findings.append(
-                    SecretFinding(
-                        file=item.get("File", ""),
-                        line=int(item.get("StartLine", 1)),
-                        rule_id=item.get("RuleID", "generic-secret"),
-                        match_preview=redact_secret(raw_match),
-                        description=item.get("Description", "Potential hardcoded secret"),
-                    )
-                )
-        return findings
-    finally:
-        if report_path.exists():
-            report_path.unlink()
+    return findings
 
 
 def _fallback_regex_scan(project_path: Path, ignore_paths: list[str] | None = None) -> list[SecretFinding]:

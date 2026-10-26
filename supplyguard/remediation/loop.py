@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import logging
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -66,7 +67,8 @@ def _scan_all(
 ) -> tuple[list[Component], list[VulnMatch], list[SecretFinding], list[SastFinding], ScoreBreakdown]:
     """Execute complete scanner pipeline over project_path."""
     # 1. SBOM + OSV
-    _, components = generate_sbom(project_path)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        _, components = generate_sbom(project_path, Path(tmp_dir) / "bom.json")
     vulns = batch_query(components)
 
     # 2. Parallel Secrets + SAST
@@ -98,6 +100,12 @@ def _get_manual_reason(finding: Any) -> str:
                 "crosses a major version boundary (potential breaking change). Manual architectural review required."
             )
         return f"Dependency {finding.package} requires manual review."
+
+    if isinstance(finding, SecretFinding):
+        return (
+            f"Hardcoded secret still present at {finding.file}:{finding.line}. Move it to an environment "
+            "variable, remove it from source (and git history), then rotate the credential."
+        )
 
     if isinstance(finding, SastFinding):
         if "admin" in finding.rule_id or "CWE-862" in finding.cwe:
@@ -182,7 +190,10 @@ def remediate(
                     explanation = f"Applied deterministic rewrite for rule {finding.rule_id}."
 
             elif strategy == FixStrategy.HYBRID and isinstance(finding, SecretFinding):
-                outcome, diff, notice = fix_secret_hybrid(project_path, finding)
+                _, diff, notice = fix_secret_hybrid(project_path, finding)
+                # The env-var stub is a helper, not a fix: the secret is still in source and
+                # still needs rotating. Counting this as RESOLVED overstated what `fix` did.
+                outcome = FixOutcome.SKIPPED
                 explanation = notice
 
             elif strategy == FixStrategy.LLM_ASSISTED and isinstance(finding, SastFinding):
@@ -230,7 +241,7 @@ def remediate(
 
     manual_list: list[dict[str, str]] = []
     for f in [*final_vulns, *final_secrets, *final_sast]:
-        if classify(f) == FixStrategy.MANUAL_REQUIRED:
+        if classify(f) == FixStrategy.MANUAL_REQUIRED or isinstance(f, SecretFinding):
             manual_list.append(
                 {
                     "target": getattr(f, "file", getattr(f, "package", "")),

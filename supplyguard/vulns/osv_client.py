@@ -16,6 +16,10 @@ OSV_VULN_URL = "https://api.osv.dev/v1/vulns"
 REQUEST_TIMEOUT_SECONDS = 10
 
 
+class OsvUnavailableError(RuntimeError):
+    """OSV.dev could not be reached. A scan must never report "clean" in that case."""
+
+
 @dataclass
 class VulnMatch:
     """Represents a matched vulnerability from OSV.dev."""
@@ -299,8 +303,10 @@ def batch_query(components: list[Component]) -> list[VulnMatch]:
 
         resp = _http_post_with_retry(OSV_BATCH_URL, {"queries": queries})
         if not resp or resp.status_code != 200:
-            logger.warning(f"OSV batch query failed for chunk starting at {i}")
-            continue
+            # Fail closed. This used to `continue`, so an OSV outage (or a blocked network
+            # in CI) produced zero vulnerabilities and the quality gate passed.
+            status = resp.status_code if resp is not None else "no response"
+            raise OsvUnavailableError(f"OSV.dev batch query failed ({status}); refusing to report a clean result")
 
         results = resp.json().get("results", [])
         items_to_fetch: list[tuple[str, str, str]] = []

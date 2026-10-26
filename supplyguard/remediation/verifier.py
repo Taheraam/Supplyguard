@@ -201,4 +201,6 @@ def apply_with_verification(
     except Exception as exc:  # noqa: BLE001 - safety verifier must roll back on ANY unexpected runtime failure
         logger.error(f"Unexpected error applying fix to {file_path}: {exc}. Reverting.")
         _revert()
-        return FixOutcome.FAILED_REGRESSION, f"Verification crashed: {exc}"
+        # FixOutcome has no FAILED_REGRESSION member: the old return raised AttributeError
+        # *after* the rollback, crashing the whole `fix` run on the first unexpected error.
+        return FixOutcome.FIX_FAILED, f"Verification crashed: {exc}"

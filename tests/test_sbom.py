@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from supplyguard.sbom.generator import (
     _parse_cyclonedx_json,
+    _parse_requirements_file,
     generate_sbom,
 )
 
@@ -68,3 +69,17 @@ def test_generate_sbom_success(mock_run: MagicMock, tmp_path: Path) -> None:
     assert len(components) == 1
     assert components[0].name == "flask"
     assert components[0].version == "2.0.1"
+
+
+def test_requirements_fallback_only_trusts_exact_pins(tmp_path: Path) -> None:
+    req = tmp_path / "requirements.txt"
+    req.write_text(
+        "flask>=3.0.0\n"
+        "requests[security]==2.25.1 ; python_version < '3.13'\n"
+        "Django == 4.2.1  # pinned\n"
+        "-e git+https://example.com/pkg.git#egg=pkg\n"
+        "rich\n",
+        encoding="utf-8",
+    )
+    versions = {c.name: c.version for c in _parse_requirements_file(req)}
+    assert versions == {"flask": "", "requests": "2.25.1", "Django": "4.2.1", "rich": ""}

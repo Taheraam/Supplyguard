@@ -6,10 +6,10 @@
 
 **Software Supply Chain Security Scanner & Self-Healing Remediation Engine**
 
-[![PyPI Version](https://img.shields.io/badge/pypi-v0.3.4-blue.svg?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/supplyguard/)
+[![PyPI Version](https://img.shields.io/badge/pypi-v0.3.5-blue.svg?style=flat-square&logo=pypi&logoColor=white)](https://pypi.org/project/supplyguard/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
-[![CI Security Gate](https://img.shields.io/badge/CI%20Gate-Passing-success.svg?style=flat-square&logo=githubactions&logoColor=white)](https://github.com/Taheraam/Supplyguard/actions)
+[![SupplyGuard CI](https://github.com/Taheraam/Supplyguard/actions/workflows/supplyguard-ci.yml/badge.svg)](https://github.com/Taheraam/Supplyguard/actions/workflows/supplyguard-ci.yml)
 [![SARIF v2.1.0](https://img.shields.io/badge/SARIF-v2.1.0-purple.svg?style=flat-square)](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
 
 <p align="center">
@@ -42,12 +42,12 @@ SupplyGuard addresses this by scanning codebases across four synchronized securi
 
 ## Features
 
-- **CycloneDX SBOM Generation**: Automated manifest parsing for dependency auditing across Python projects.
-- **OSV.dev Vulnerability Correlation**: Real-time batch queries against the Open Source Vulnerability database for up-to-date CVE matching.
-- **Zero-Leak Secrets Scanner**: Pattern matching for API tokens and credentials with strict zero-leakage redaction (`first 3 + ... + last 3 chars`).
-- **AI-Code Smell SAST**: Static analysis rules targeting security weaknesses common in LLM-assisted codebases (CWE-89, CWE-78, CWE-295, CWE-489, CWE-347, CWE-916, CWE-330).
+- **CycloneDX SBOM Generation**: Builds a CycloneDX SBOM from `requirements.txt` (save it with `--sbom-output`). Only exact `==` pins are checked against OSV, since a range like `>=3.0` doesn't say which version is installed.
+- **OSV.dev Vulnerability Correlation**: Real-time batch queries against the Open Source Vulnerability database. If OSV can't be reached, the scan exits `2` instead of reporting a clean result.
+- **Secrets Scanner**: Gitleaks over the working tree **and git history** (deleted secrets are still leaked), with a built-in regex fallback. Matches are redacted before storage or display (`first 3 + ... + last 3`; secrets shorter than 12 chars are fully masked).
+- **AI-Code Smell SAST**: 10 Semgrep rules (bundled) for weaknesses common in LLM-assisted code (CWE-89, CWE-78, CWE-295, CWE-489, CWE-347, CWE-916, CWE-330, CWE-862, CWE-94, CWE-942), with a built-in Python AST engine as a fallback when Semgrep is missing or fails.
 - **SemVer-Aware Remediation**: Intelligent dependency resolution selecting the minimum compatible version (patch > minor > major) while preventing breaking major version jumps.
-- **Self-Healing AST & Test Verification**: Automated patch generation backed by in-memory backups, syntax parsing, dry-run dependency resolution (`pip install --dry-run`), and test-suite execution that rolls back any modification introducing errors or regressions.
+- **Self-Healing AST & Test Verification**: Every patch runs behind an in-memory backup → AST parse → targeted rescan (target finding gone, **no new findings**) → `pip install --dry-run` (wheels only, index options stripped) → project test suite, and is rolled back if any step fails.
 - **Native SARIF v2.1.0 & CI Gates**: Native export to SARIF for the GitHub Security tab and configurable risk threshold exit codes (`--threshold 40`).
 - **Zero-Config Execution**: Built-in fallback engines that operate out-of-the-box without requiring external binary installations.
 
@@ -148,18 +148,22 @@ Scan a target codebase for dependencies, vulnerabilities, secrets, and static co
 | `--threshold` | `-t` | `100` | Risk score threshold (0–100). Exits with code `1` if exceeded. |
 | `--output` | `-o` | `stdout` | Write output to a specific file path. |
 | `--db-path` | | `supplyguard.db` | Target SQLite database path for history tracking. |
+| `--sbom-output` | | *(not saved)* | Save the CycloneDX SBOM to this path. Nothing is written into the scanned project. |
 | `--verbose` | `-v` | `false` | Enable verbose debug output. |
 
 #### Exit Codes:
 - `0`: Scan passed (Risk Score <= Threshold)
 - `1`: Policy violation (Risk Score > Threshold)
-- `2`: Tool execution error
+- `2`: Tool error (including OSV.dev unreachable). CI should treat this as a failure, not a pass.
 
 ---
 
 ### `supplyguard fix [PATH]`
 
 Execute the self-healing remediation loop.
+
+> **Trust boundary:** `scan` never executes code from the scanned project. `fix` does: it runs the
+> project's test suite and pip resolution to verify each patch. Only run `fix` on code you trust.
 
 | Option | Default | Description |
 |---|---|---|
@@ -242,11 +246,11 @@ jobs:
         run: pip install supplyguard
 
       - name: Run Security Scan
+        id: scan
         run: |
-          supplyguard scan . \
-            --format sarif \
-            --threshold 40 \
-            -o results.sarif
+          set +e
+          supplyguard scan . --format sarif --threshold 40 -o results.sarif
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
@@ -254,7 +258,18 @@ jobs:
         with:
           sarif_file: results.sarif
           category: supplyguard
+
+      # Upload first, then fail — so findings are visible even when the gate blocks the build.
+      - name: Enforce gate
+        if: steps.scan.outputs.exit_code != '0'
+        run: exit 1
 ```
+
+Install [Gitleaks](https://github.com/gitleaks/gitleaks) and `pip install semgrep` in the job to use the full
+scanners instead of the built-in fallbacks. See [`.github/workflows/supplyguard-ci.yml`](.github/workflows/supplyguard-ci.yml)
+for the pipeline this repo runs on itself (tests on 3.11–3.13, wheel-content check, checksum-verified Gitleaks,
+blocking self-scan). Releases are published from [`publish.yml`](.github/workflows/publish.yml) using PyPI
+Trusted Publishing (OIDC), so no PyPI API token is stored in GitHub.
 
 ---
 
@@ -322,9 +337,18 @@ SupplyGuard maintains a strict separation between safe automated fixes and chang
 ## Security Principles
 
 1. **Local-Only Remediation**: `supplyguard fix` never pushes or merges changes to remote branches. All modifications remain local for developer review.
-2. **Zero Raw Secret Storage**: The secrets scanner redacts findings (`first 3 + ... + last 3 chars`) before logging, database persistence, or display.
+2. **Zero Raw Secret Storage**: Secret matches are redacted before logging, database persistence, or display. Detected secrets are never "auto-fixed": `fix` adds an env-var stub and lists the secret under manual actions (remove from source and history, then rotate).
 3. **Dry-Run & Rollback-on-Failure**: Automated patches must pass syntax parsing, package dry-run checks, and existing test suites before being kept. If verification fails, changes are reverted automatically.
-4. **No Intent Guessing**: Security-critical controls such as authentication boundaries, major version jumps, and authorization decorators are never guessed and are flagged for manual review.
+4. **Fail Closed**: If OSV.dev is unreachable or Semgrep errors, SupplyGuard reports a tool error or falls back to its built-in engine. It never reports a clean result it didn't verify.
+5. **No Intent Guessing**: Security-critical controls such as authentication boundaries, major version jumps, and authorization decorators are never guessed and are flagged for manual review.
+
+---
+
+## Limitations
+
+- Python only; dependencies are read from `requirements.txt` (not `pyproject.toml`, Poetry or lockfiles yet).
+- The risk score is capped at 100, so very large backlogs all read as 100. Use the JSON/SARIF output for counts.
+- LLM-assisted patches need `ANTHROPIC_API_KEY`; without it a small rule-based fallback is used.
 
 ---
 

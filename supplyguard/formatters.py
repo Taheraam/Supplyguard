@@ -9,11 +9,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from supplyguard import __version__
 from supplyguard.scoring.engine import ScoreBreakdown
 
 SARIF_SCHEMA = "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json"
+TOOL_VERSION = __version__
 TOOL_NAME = "SupplyGuard"
-TOOL_VERSION = "0.3.2"
 TOOL_URI = "https://github.com/Taheraam/Supplyguard"
 
 
@@ -160,12 +161,15 @@ _SEVERITY_TO_SARIF_LEVEL = {
     "INFO": "note",
 }
 
+# GitHub code scanning reads `security-severity` as a CVSS-style score from 0.0 to 10.0
+# (>= 9.0 critical, >= 7.0 high, >= 4.0 medium, else low). The old 95/80/50/20 values
+# were all above 9.0, so every alert, even LOW ones, showed up as Critical.
 _SEVERITY_TO_SARIF_RANK = {
-    "CRITICAL": 95.0,
-    "HIGH": 80.0,
-    "MEDIUM": 50.0,
-    "LOW": 20.0,
-    "INFO": 10.0,
+    "CRITICAL": 9.5,
+    "HIGH": 8.0,
+    "MEDIUM": 5.5,
+    "LOW": 3.0,
+    "INFO": 1.0,
 }
 
 
@@ -189,7 +193,7 @@ def _build_sarif_rule(finding: dict[str, Any]) -> dict[str, Any]:
             "level": _SEVERITY_TO_SARIF_LEVEL.get(severity, "warning"),
         },
         "properties": {
-            "security-severity": str(_SEVERITY_TO_SARIF_RANK.get(severity, 50.0)),
+            "security-severity": str(_SEVERITY_TO_SARIF_RANK.get(severity, 5.5)),
         },
     }
 
@@ -241,7 +245,7 @@ def _build_sarif_result(finding: dict[str, Any], idx: int) -> dict[str, Any]:
         ],
         "properties": {
             "source": finding.get("source", "unknown"),
-            "security-severity": str(_SEVERITY_TO_SARIF_RANK.get(severity, 50.0)),
+            "security-severity": str(_SEVERITY_TO_SARIF_RANK.get(severity, 5.5)),
         },
     }
 

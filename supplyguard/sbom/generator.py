@@ -67,24 +67,42 @@ def _parse_cyclonedx_json(sbom_file: Path) -> list[Component]:
     return components
 
 
+_REQ_LINE = re.compile(
+    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)"  # package name
+    r"(?:\[[^\]]*\])?"                      # optional extras: pkg[security]
+    r"\s*(?P<spec>[^;#]*)"                    # version specifier(s), up to marker/comment
+)
+
+
 def _parse_requirements_file(req_file: Path) -> list[Component]:
-    """Parse components directly from requirements.txt as a fast fallback."""
+    """Parse components directly from requirements.txt as a fast fallback.
+
+    Only exact pins (`==` / `===`) carry a version. A range like `flask>=3.0.0` says nothing
+    about the installed version; it used to be reported as 3.0.0, which produced false-positive
+    CVEs for versions the project never installs. Unpinned packages get an empty version and
+    are skipped by the OSV lookup.
+    """
     components: list[Component] = []
     try:
         lines = req_file.read_text(encoding="utf-8").splitlines()
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith(("#", "-")):
-                continue
-            # Match package==version or package>=version or package
-            match = re.match(r"^([a-zA-Z0-9_\-]+)(?:[=><~^!]+([0-9a-zA-Z._\-]+))?", line)
-            if match:
-                name = match.group(1)
-                version = match.group(2) or "0.0.0"
-                purl = f"pkg:pypi/{name}@{version}"
-                components.append(Component(name=name, version=version, purl=purl))
     except OSError as err:
         logger.warning(f"Failed to read requirements fallback: {err}")
+        return components
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith(("#", "-")):
+            continue
+        match = _REQ_LINE.match(line)
+        if not match:
+            continue
+        name = match.group("name")
+        pin = re.fullmatch(r"===?\s*([0-9A-Za-z.+!_-]+)", match.group("spec").strip())
+        version = pin.group(1) if pin else ""
+        if not version:
+            logger.debug(f"{name} is not pinned with ==; skipping vulnerability lookup")
+        purl = f"pkg:pypi/{name.lower()}@{version}" if version else f"pkg:pypi/{name.lower()}"
+        components.append(Component(name=name, version=version, purl=purl))
     return components
 
 

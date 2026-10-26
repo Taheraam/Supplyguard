@@ -2,6 +2,10 @@
 
 import logging
 import re
+import subprocess
+import sys
+import tempfile
+from collections import Counter
 from pathlib import Path
 
 from supplyguard.remediation.verifier import FixOutcome, apply_with_verification
@@ -9,6 +13,60 @@ from supplyguard.sast.scanner import SastFinding, run_sast
 from supplyguard.secrets.scanner import SecretFinding
 
 logger = logging.getLogger(__name__)
+
+
+def rule_counts(project_path: Path, rel_file: str) -> Counter[str]:
+    """How many times each SAST rule fires in one file."""
+    return Counter(f.rule_id for f in run_sast(project_path) if f.file == rel_file)
+
+
+def patch_is_improvement(before: Counter[str], after: Counter[str], target_rule: str) -> bool:
+    """A patch must remove the target finding AND must not introduce any other finding.
+
+    Checking only the target rule let a patch "fix" e.g. a weak hash while adding a
+    subprocess(shell=True), and still count as RESOLVED.
+    """
+    if after[target_rule] >= before[target_rule]:
+        return False
+    return all(after[rule] <= before[rule] for rule in after if rule != target_rule)
+
+
+def _pip_dry_run(req_path: Path) -> bool:
+    """Ask pip whether the requirements resolve, without executing any project code.
+
+    - Only requirement lines are passed on; option lines such as `--index-url`,
+      `--extra-index-url`, `-e` or `-f` are dropped, so a malicious requirements file
+      cannot redirect pip to an attacker's package index (dependency confusion).
+    - `--only-binary=:all:` forbids building sdists, which would run their setup.py.
+    """
+    requirement_lines = [
+        line for line in req_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith(("#", "-"))
+    ]
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as tmp:
+        tmp.write("\n".join(requirement_lines) + "\n")
+        sanitized = Path(tmp.name)
+    try:
+        res = subprocess.run(
+            [
+                sys.executable, "-m", "pip", "install", "--dry-run", "--no-deps",
+                "--only-binary=:all:", "--isolated", "--index-url", "https://pypi.org/simple",
+                "-r", str(sanitized),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            shell=False,
+        )
+        if res.returncode != 0:
+            logger.warning(f"pip install --dry-run validation failed: {res.stderr}")
+            return False
+        return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError) as err:
+        logger.warning(f"Dry-run pip verification skipped due to environment constraint: {err}")
+        return True
+    finally:
+        sanitized.unlink(missing_ok=True)
 
 
 def _verify_requirements_txt(req_path: Path) -> bool:
@@ -61,43 +119,29 @@ def fix_dependency(
     def _patch() -> None:
         lines = req_path.read_text(encoding="utf-8").splitlines()
         new_lines: list[str] = []
-        pattern = re.compile(rf"^{re.escape(package_name)}(?:[<>=~!].*)?$", re.IGNORECASE)
+        # name, optional [extras], specifier, optional "; marker" / "# comment"
+        pattern = re.compile(
+            rf"^(?P<name>{re.escape(package_name)})(?P<extras>\[[^\]]*\])?\s*(?:[<>=~!][^;#]*?)?(?P<tail>\s*[;#].*)?$",
+            re.IGNORECASE,
+        )
         for line in lines:
-            if pattern.match(line.strip()):
-                new_lines.append(f"{package_name}=={fixed_version}")
+            m = pattern.match(line.strip())
+            if m:
+                # Keep extras and environment markers; only the version changes.
+                new_lines.append(f"{m.group('name')}{m.group('extras') or ''}=={fixed_version}{m.group('tail') or ''}")
             else:
                 new_lines.append(line)
         req_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
     def _check() -> bool:
-        content = req_path.read_text(encoding="utf-8")
-        if f"{package_name}=={fixed_version}" not in content:
+        content = req_path.read_text(encoding="utf-8").lower()
+        if f"=={fixed_version}".lower() not in content or package_name.lower() not in content:
             return False
 
         if not _verify_requirements_txt(req_path):
             return False
 
-        import subprocess
-        import sys
-
-        try:
-            res = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--dry-run", "--no-deps", "-r", str(req_path)],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                shell=False,
-            )
-            if res.returncode != 0:
-                logger.warning(f"pip install --dry-run validation failed: {res.stderr}")
-                return False
-        except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError) as err:
-            logger.warning(f"Dry-run pip verification skipped due to environment constraint: {err}")
-        except Exception as err:
-            logger.warning(f"Unexpected error during requirements validation: {err}")
-            return False
-
-        return True
+        return _pip_dry_run(req_path)
 
     return apply_with_verification(req_path, _patch, _check, project_path)
 
@@ -124,11 +168,7 @@ def fix_sast_deterministic(
     if not target_file.exists():
         return FixOutcome.FIX_FAILED, ""
 
-    initial_matching = [
-        f for f in run_sast(project_path)
-        if f.file == finding.file and f.rule_id == finding.rule_id
-    ]
-    initial_count = len(initial_matching)
+    before = rule_counts(project_path, finding.file)
 
     def _patch() -> None:
         content = target_file.read_text(encoding="utf-8")
@@ -165,13 +205,7 @@ def fix_sast_deterministic(
             target_file.write_text(patched, encoding="utf-8")
 
     def _check() -> bool:
-        # Re-run SAST check on file and verify finding count decreased
-        findings = run_sast(project_path)
-        matching = [
-            f for f in findings
-            if f.file == finding.file and f.rule_id == finding.rule_id
-        ]
-        return len(matching) < initial_count or len(matching) == 0
+        return patch_is_improvement(before, rule_counts(project_path, finding.file), finding.rule_id)
 
     return apply_with_verification(target_file, _patch, _check, project_path)
 
@@ -180,6 +214,9 @@ def fix_secret_hybrid(
     project_path: Path, finding: SecretFinding
 ) -> tuple[FixOutcome, str, str]:
     """Document exposed secret in .env.example (name only) and issue rotation notice.
+
+    This does NOT remove the secret from source; that, and rotating it, is a human task.
+    The loop therefore reports this as SKIPPED + manual action, never RESOLVED.
 
     Args:
         project_path: Project root path.
