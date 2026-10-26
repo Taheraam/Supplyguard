@@ -15,9 +15,9 @@ def test_redact_secret() -> None:
     assert redacted == "AKI...DEF"
     assert "1234567890ABC" not in redacted
 
-    # Short secret
-    short_raw = "12345"
-    assert redact_secret(short_raw) == "***"
+    # Short secrets are fully masked: 3+3 visible chars would expose most of them
+    assert redact_secret("12345") == "***"
+    assert redact_secret("hunter22") == "***"
 
 
 def test_secrets_scanner_detection_and_redaction(tmp_path: Path) -> None:
@@ -35,3 +35,11 @@ def test_secrets_scanner_detection_and_redaction(tmp_path: Path) -> None:
     assert finding.match_preview == "FAK...USE"
     assert "FAKE_KEY_FOR_TESTING_DO_NOT_USE" != finding.match_preview
     assert "DO_NOT_USE" not in finding.match_preview or finding.match_preview.endswith("USE")
+
+
+def test_gitleaks_paths_are_made_project_relative(tmp_path: Path) -> None:
+    from supplyguard.secrets.scanner import _normalize_path
+
+    (tmp_path / "app").mkdir()
+    absolute = str(tmp_path / "app" / "settings.py")
+    assert _normalize_path(absolute, tmp_path) == "app/settings.py"
