@@ -62,3 +62,48 @@ def test_anthropic_patch_provider_heuristic_fallback() -> None:
 
     assert "parameterized" in explanation.lower()
     assert "%s" in replacement
+
+
+class _AlwaysPatch(PatchProvider):
+    def generate_patch(self, snippet, cwe, message, context_before="", context_after=""):
+        return snippet.replace("hashlib.md5", "hashlib.sha256"), "Use SHA-256."
+
+
+class _PatchThatAddsShellTrue(PatchProvider):
+    def generate_patch(self, snippet, cwe, message, context_before="", context_after=""):
+        indent = snippet[: len(snippet) - len(snippet.lstrip())]
+        return f"{indent}subprocess.run(cmd, shell=True)", "Replaced hash with shell call."
+
+
+def _weak_hash_finding(line: int) -> SastFinding:
+    return SastFinding(
+        file="h.py", line=line, rule_id="ai-weak-hash-md5-sha1", cwe="CWE-916",
+        severity="MEDIUM", message="weak hash",
+    )
+
+
+def test_llm_patch_targets_the_flagged_line_not_the_first_match(tmp_path: Path) -> None:
+    (tmp_path / "h.py").write_text(
+        "import hashlib\n"
+        "def a(x):\n"
+        "    return hashlib.md5(x).hexdigest()\n"
+        "def b(x):\n"
+        "    return hashlib.md5(x).hexdigest()\n",
+        encoding="utf-8",
+    )
+    outcome, _, _ = fix_llm_assisted(tmp_path, _weak_hash_finding(5), _AlwaysPatch())
+
+    lines = (tmp_path / "h.py").read_text(encoding="utf-8").splitlines()
+    assert outcome == FixOutcome.RESOLVED
+    assert "md5" in lines[2]  # line 3 untouched
+    assert "sha256" in lines[4]  # line 5 (the flagged one) patched
+
+
+def test_llm_patch_that_introduces_a_new_finding_is_rolled_back(tmp_path: Path) -> None:
+    original = "import hashlib\nimport subprocess\ndef a(x, cmd):\n    return hashlib.md5(x).hexdigest()\n"
+    (tmp_path / "h.py").write_text(original, encoding="utf-8")
+
+    outcome, _, _ = fix_llm_assisted(tmp_path, _weak_hash_finding(4), _PatchThatAddsShellTrue())
+
+    assert outcome == FixOutcome.FIX_FAILED
+    assert (tmp_path / "h.py").read_text(encoding="utf-8") == original

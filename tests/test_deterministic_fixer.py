@@ -87,3 +87,24 @@ def test_verify_requirements_txt(tmp_path: Path) -> None:
     conflict_req.write_text("requests==2.25.1\nrequests==2.31.0\n", encoding="utf-8")
     assert _verify_requirements_txt(conflict_req) is False
 
+
+
+def test_fix_dependency_keeps_extras_and_markers(tmp_path: Path) -> None:
+    req = tmp_path / "requirements.txt"
+    req.write_text("requests[security]==2.25.1 ; python_version < '3.13'\nflask==3.0.0\n", encoding="utf-8")
+
+    outcome, _ = fix_dependency(tmp_path, "requests", "2.31.0")
+
+    assert outcome == FixOutcome.RESOLVED
+    assert req.read_text(encoding="utf-8").splitlines()[0] == "requests[security]==2.31.0 ; python_version < '3.13'"
+
+
+def test_patch_is_improvement_rejects_new_findings() -> None:
+    from collections import Counter
+
+    from supplyguard.remediation.deterministic_fixer import patch_is_improvement
+
+    before = Counter({"weak-hash": 1})
+    assert patch_is_improvement(before, Counter(), "weak-hash")
+    assert not patch_is_improvement(before, Counter({"weak-hash": 1}), "weak-hash")
+    assert not patch_is_improvement(before, Counter({"shell-true": 1}), "weak-hash")
