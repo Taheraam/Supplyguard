@@ -1,12 +1,14 @@
 """Unit tests for OSV.dev REST client module."""
 
 
+import pytest
 import responses
 
 from supplyguard.sbom.generator import Component
 from supplyguard.vulns.osv_client import (
     OSV_BATCH_URL,
     OSV_VULN_URL,
+    OsvUnavailableError,
     batch_query,
 )
 
@@ -87,3 +89,10 @@ def test_select_minimum_compatible_version() -> None:
     # Empty candidate list
     assert select_minimum_compatible_version("1.0.0", []) is None
 
+
+
+@responses.activate
+def test_batch_query_fails_closed_when_osv_is_down() -> None:
+    responses.add(responses.POST, OSV_BATCH_URL, status=503)
+    with pytest.raises(OsvUnavailableError):
+        batch_query([Component(name="requests", version="2.25.1")])
