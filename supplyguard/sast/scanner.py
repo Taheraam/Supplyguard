@@ -51,10 +51,50 @@ def _path_matches_ignore(rel_path: str, ignore_patterns: list[str]) -> bool:
     return False
 
 
+_SEMGREP_SEVERITY = {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "LOW"}
+
+
+def _normalize_semgrep_result(res: dict, project_path: Path) -> SastFinding:
+    """Map one Semgrep JSON result onto SupplyGuard's conventions.
+
+    Semgrep reports absolute paths, dotted rule ids (``supplyguard.sast.rules.ai-weak-hash``),
+    ERROR/WARNING/INFO severities and CWE as a list of strings. Left as-is, ignore_paths and
+    ignore_rules never matched, and WARNING findings were dropped by ``severity_minimum``.
+    """
+    extra = res.get("extra", {})
+    metadata = extra.get("metadata", {})
+
+    raw_path = Path(res.get("path", ""))
+    try:
+        file = raw_path.resolve().relative_to(project_path.resolve()).as_posix()
+    except ValueError:
+        file = raw_path.as_posix()
+
+    cwe = metadata.get("cwe", "CWE-Unknown")
+    if isinstance(cwe, list):
+        cwe = cwe[0] if cwe else "CWE-Unknown"
+    cwe = str(cwe).split(":")[0].strip()  # "CWE-89: SQL Injection" -> "CWE-89"
+
+    raw_sev = str(extra.get("severity", "WARNING")).upper()
+    return SastFinding(
+        file=file,
+        line=int(res.get("start", {}).get("line", 1)),
+        rule_id=str(res.get("check_id", "sast-finding")).split(".")[-1],
+        severity=_SEMGREP_SEVERITY.get(raw_sev, raw_sev),
+        cwe=cwe,
+        message=extra.get("message", "Potential security issue"),
+    )
+
+
 def _run_semgrep_cli(
     project_path: Path, rules_path: Path, include_public: bool = False
 ) -> list[SastFinding]:
-    """Execute Semgrep CLI against project_path."""
+    """Execute Semgrep CLI against project_path.
+
+    Raises:
+        SemgrepExecutionError: Semgrep is missing, or it failed (e.g. an invalid rules file).
+            Previously a failed run was read as "zero findings", so SAST silently passed.
+    """
     semgrep_bin = shutil.which("semgrep")
     if not semgrep_bin:
         raise SemgrepExecutionError(
@@ -62,44 +102,26 @@ def _run_semgrep_cli(
             "Install Semgrep via 'pip install semgrep' or see https://semgrep.dev"
         )
 
-    cmd = [
-        semgrep_bin,
-        f"--config={rules_path}",
-        "--json",
-        str(project_path),
-    ]
+    cmd = [semgrep_bin, f"--config={rules_path}", "--json", "--metrics=off", str(project_path)]
     if include_public:
         cmd.append("--config=p/security-audit")
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        shell=False,
-        check=False,
-    )
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, shell=False, check=False, timeout=600)
+    except subprocess.TimeoutExpired as err:
+        raise SemgrepExecutionError(f"Semgrep timed out: {err}") from err
 
-    findings: list[SastFinding] = []
-    if result.stdout:
-        try:
-            data = json.loads(result.stdout)
-            for res in data.get("results", []):
-                extra = res.get("extra", {})
-                metadata = extra.get("metadata", {})
-                findings.append(
-                    SastFinding(
-                        file=res.get("path", ""),
-                        line=int(res.get("start", {}).get("line", 1)),
-                        rule_id=res.get("check_id", "sast-finding"),
-                        severity=extra.get("severity", "WARNING").upper(),
-                        cwe=metadata.get("cwe", "CWE-Unknown"),
-                        message=extra.get("message", "Potential security issue"),
-                    )
-                )
-        except json.JSONDecodeError as err:
-            logger.warning(f"Could not parse Semgrep JSON output: {err}")
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as err:
+        raise SemgrepExecutionError(f"Could not parse Semgrep JSON output: {err}") from err
 
-    return findings
+    # Exit 0 = clean run, 1 = findings. Anything else (7 = invalid config, 2 = fatal) is a failure.
+    if result.returncode not in (0, 1):
+        messages = "; ".join(str(e.get("message", ""))[:200] for e in data.get("errors", [])) or result.stderr[-300:]
+        raise SemgrepExecutionError(f"Semgrep failed (exit {result.returncode}): {messages}")
+
+    return [_normalize_semgrep_result(res, project_path) for res in data.get("results", [])]
 
 
 class _FallbackAstVisitor(ast.NodeVisitor):
@@ -366,7 +388,7 @@ def run_sast(
         findings = _run_semgrep_cli(project_path, target_rules, include_public_rules)
     except SemgrepExecutionError as err:
         if allow_fallback:
-            logger.debug(f"{err}. Using internal AST SAST scanner.")
+            logger.warning(f"{err}. Using internal AST SAST scanner.")
             return _fallback_sast_scan(project_path, ignore_paths=ignore_paths)
         raise
 

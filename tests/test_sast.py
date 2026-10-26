@@ -137,3 +137,43 @@ def test_rule_10_insecure_random_token(tmp_path: Path) -> None:
     vuln_file.write_text('auth_token = secrets.token_hex(16)\n', encoding="utf-8")
     findings = run_sast(tmp_path, allow_fallback=True)
     assert not any("random-token" in f.rule_id for f in findings)
+
+
+def test_semgrep_failure_falls_back_instead_of_reporting_clean(tmp_path, monkeypatch) -> None:
+    """An invalid rules file used to make Semgrep exit 7 with no results → 'no findings'."""
+    import subprocess as sp
+
+    from supplyguard.sast import scanner
+
+    (tmp_path / "app.py").write_text("import hashlib\nhashlib.md5(b'x')\n", encoding="utf-8")
+    monkeypatch.setattr(scanner.shutil, "which", lambda _: "/usr/bin/semgrep")
+    monkeypatch.setattr(
+        scanner.subprocess, "run",
+        lambda *a, **k: sp.CompletedProcess(a, 7, stdout='{"results": [], "errors": [{"message": "Invalid YAML"}]}', stderr=""),
+    )
+
+    findings = scanner.run_sast(tmp_path)
+
+    assert any(f.rule_id == "ai-weak-hash-md5-sha1" for f in findings)  # came from the AST fallback
+
+
+def test_semgrep_results_are_normalized(tmp_path) -> None:
+    from supplyguard.sast.scanner import _normalize_semgrep_result
+
+    res = {
+        "path": str(tmp_path / "pkg" / "db.py"),
+        "start": {"line": 7},
+        "check_id": "supplyguard.sast.rules.ai-sql-injection-concat",
+        "extra": {"severity": "WARNING", "message": "sql", "metadata": {"cwe": ["CWE-89: SQL Injection"]}},
+    }
+    f = _normalize_semgrep_result(res, tmp_path)
+    assert (f.file, f.rule_id, f.severity, f.cwe) == ("pkg/db.py", "ai-sql-injection-concat", "MEDIUM", "CWE-89")
+
+
+def test_bundled_semgrep_rules_are_valid_yaml() -> None:
+    import yaml
+
+    from supplyguard.sast.scanner import DEFAULT_RULES_PATH
+
+    rules = yaml.safe_load(DEFAULT_RULES_PATH.read_text(encoding="utf-8"))["rules"]
+    assert len(rules) == 10
